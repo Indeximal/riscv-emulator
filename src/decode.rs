@@ -1,8 +1,8 @@
-//! TODO: 2.3 (p16): S, B, U, J type
+//! TODO: 2.3 (p16): S type
 
 #![allow(dead_code)]
 
-use crate::Uxlen;
+use crate::{Ixlen, Uxlen};
 
 pub(crate) struct RType {
     pub opcode: u8,
@@ -32,7 +32,7 @@ pub(crate) struct IType {
     pub rs1: u8,
     pub rd: u8,
     // TODO: 64 bit ??
-    pub imm: Uxlen,
+    pub imm: Ixlen,
 }
 
 impl From<u32> for IType {
@@ -43,7 +43,7 @@ impl From<u32> for IType {
             rs1: ((instr >> 15) & 0b1_1111) as u8,
             rd: ((instr >> 7) & 0b1_1111) as u8,
             // Shifting as i32 garantees sign extension
-            imm: (instr as i32 >> 20) as u32,
+            imm: (instr as i32 >> 20) as Ixlen,
         }
     }
 }
@@ -51,6 +51,7 @@ impl From<u32> for IType {
 pub(crate) struct UType {
     pub opcode: u8,
     pub rd: u8,
+    // FIXME: should be signed?
     pub imm: Uxlen,
 }
 
@@ -59,7 +60,56 @@ impl From<u32> for UType {
         UType {
             opcode: (instr & 0b111_1111) as u8,
             rd: ((instr >> 7) & 0b1_1111) as u8,
+            // Place into upper 20 bits. FIXME: 64bit
             imm: instr & 0xff_ff_f0_00,
+        }
+    }
+}
+
+pub(crate) struct JType {
+    pub opcode: u8,
+    pub rd: u8,
+    pub imm: Ixlen,
+}
+
+impl From<u32> for JType {
+    fn from(instr: u32) -> JType {
+        // Unlike `UType` the bits are somewhat manged and are not
+        // aligned in the upper bits. They are bit 20 to bit 1,
+        // with bit 0 being 0.
+        let offset = ((instr & 0x80_00_00_00) as i32 >> 11)
+            | ((instr & 0x7f_e0_00_00) >> 20) as i32
+            | ((instr & 0x00_10_00_00) >> 9) as i32
+            | (instr & 0x00_0f_f0_00) as i32;
+        JType {
+            opcode: (instr & 0b111_1111) as u8,
+            rd: ((instr >> 7) & 0b1_1111) as u8,
+            imm: offset as Ixlen,
+        }
+    }
+}
+
+pub(crate) struct BType {
+    pub opcode: u8,
+    pub funct3: u8,
+    pub rs1: u8,
+    pub rs2: u8,
+    pub imm: Ixlen,
+}
+
+impl From<u32> for BType {
+    fn from(instr: u32) -> BType {
+        // Demange bits. Note that bit 31 is sign extended, & bit 0 is set to 0.
+        let offset = ((instr & 0x80_00_00_00) as i32 >> 19)
+            | ((instr & 0x7e_00_00_00) >> 20) as i32
+            | ((instr & 0x00_00_0f_00) >> 7) as i32
+            | ((instr & 0x00_00_00_80) << 4) as i32;
+        BType {
+            opcode: (instr & 0b111_1111) as u8,
+            funct3: ((instr >> 12) & 0b111) as u8,
+            rs1: ((instr >> 15) & 0b1_1111) as u8,
+            rs2: ((instr >> 20) & 0b1_1111) as u8,
+            imm: offset as Ixlen,
         }
     }
 }
