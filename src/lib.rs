@@ -5,8 +5,6 @@
 //! * Tests
 //!
 
-use std::ops::IndexMut;
-
 use decode::{BType, IType, JType, RType, SType, UType};
 use exception::Exception;
 
@@ -32,77 +30,84 @@ mod exception {
 /// Little endian by design, such that instruction fetches (always LE)
 /// and word fetches work the same.
 pub struct AddressSpace<'a> {
-    /// Maps to 0x10000 - 0x1000000, 16 MB memory
-    main_memory: &'a mut [u8; 0xfe_ff_ff],
+    /// Maps to 0x100_0000 - 0x1ff_ffff, 16 MB memory
+    main_memory: &'a mut [u8; 0x100_0000],
 }
 
 impl<'a> AddressSpace<'a> {
-    const MEM_START: Uxlen = 0x1_0000;
-    const MEM_END: Uxlen = 0x100_0000;
+    const MEM_SIZE: Uxlen = 1 << 24;
 
-    /// `addr` (should, not quite sure) be the lowest memory byte.
-    /// msB add addr+NUMBYTES.
-    ///
-    /// Return &value[0] is the LSB.
-    ///
-    /// This is slightly overengineered, especially for u8, but should optimize out
-    fn address<const NUMBYTES: usize>(
-        &mut self,
-        addr: Uxlen,
-    ) -> Result<&mut [u8; NUMBYTES], Exception> {
-        if addr >= Self::MEM_START && addr < Self::MEM_END - NUMBYTES as Uxlen {
-            let subslice = self.main_memory.index_mut(
-                ((addr - Self::MEM_START) as usize)
-                    ..(addr as usize - Self::MEM_START as usize + NUMBYTES),
-            );
-            Ok(subslice
-                .try_into()
-                .expect("Slice range indexing didn't return length NUMBYTES!"))
+    /// This might need optimizations, e.g. Const generics for width
+    fn address(&self, addr: Uxlen, width: usize) -> Result<usize, Exception> {
+        if addr & !(Self::MEM_SIZE - 1) == Self::MEM_SIZE
+            && (addr + width as Uxlen - 1) & !(Self::MEM_SIZE - 1) == Self::MEM_SIZE
+        {
+            Ok((addr & (Self::MEM_SIZE - 1)) as usize)
         } else {
             Err(Exception::AccessFault)
         }
     }
 
-    // FIXME: mutable access ?
-    pub fn read_word(&mut self, addr: Uxlen) -> Result<u32, Exception> {
-        let &mut val = self.address(addr)?;
-        Ok(u32::from_le_bytes(val))
+    pub fn read_word(&self, addr: Uxlen) -> Result<u32, Exception> {
+        let lsb_index = self.address(addr, 4)?;
+        Ok(u32::from_le_bytes(
+            self.main_memory[lsb_index..lsb_index + 4]
+                .try_into()
+                .unwrap(),
+        ))
     }
 
-    pub fn read_halfword(&mut self, addr: Uxlen) -> Result<u16, Exception> {
-        let &mut val = self.address(addr)?;
-        Ok(u16::from_le_bytes(val))
+    pub fn read_halfword(&self, addr: Uxlen) -> Result<u16, Exception> {
+        let lsb_index = self.address(addr, 2)?;
+        Ok(u16::from_le_bytes(
+            self.main_memory[lsb_index..lsb_index + 2]
+                .try_into()
+                .unwrap(),
+        ))
     }
 
-    pub fn read_byte(&mut self, addr: Uxlen) -> Result<u8, Exception> {
-        let &mut val = self.address(addr)?;
-        Ok(u8::from_le_bytes(val))
+    pub fn read_byte(&self, addr: Uxlen) -> Result<u8, Exception> {
+        let lsb_index = self.address(addr, 1)?;
+        Ok(self.main_memory[lsb_index])
     }
 
     pub fn write_word(&mut self, addr: Uxlen, val: u32) -> Result<(), Exception> {
-        let &mut mut bytes = self.address::<4>(addr)?;
-        bytes.copy_from_slice(val.to_le_bytes().as_slice());
+        let lsb_index = self.address(addr, 4)?;
+        self.main_memory[lsb_index..lsb_index + 4].copy_from_slice(&val.to_le_bytes());
+
+        Ok(())
+    }
+
+    pub fn write_halfword(&mut self, addr: Uxlen, val: u16) -> Result<(), Exception> {
+        let lsb_index = self.address(addr, 2)?;
+        self.main_memory[lsb_index..lsb_index + 2].copy_from_slice(&val.to_le_bytes());
+
+        Ok(())
+    }
+
+    pub fn write_byte(&mut self, addr: Uxlen, val: u8) -> Result<(), Exception> {
+        let lsb_index = self.address(addr, 2)?;
+        self.main_memory[lsb_index] = val;
+
         Ok(())
     }
 }
 
 #[test]
 fn mem_test() {
-    let mut mem = vec![0u8; 0xfe_ff_ff];
+    let mut mem = vec![0u8; 0x100_0000];
     let mut address_space = AddressSpace {
         main_memory: mem.as_mut_slice().try_into().expect("Wrong memory size"),
     };
 
-    // FIXME: writing doesn't work
-
     address_space
-        .write_word(AddressSpace::MEM_START, 0x12_34_56_78)
-        .expect("Bound check failed");
+        .write_word(AddressSpace::MEM_SIZE, 0x12_34_56_78)
+        .expect("Write bound check failed");
     assert_eq!(address_space.main_memory[0..4], [0x78, 0x56, 0x34, 0x12]);
     assert_eq!(
         address_space
-            .read_word(AddressSpace::MEM_START)
-            .expect("Bounds check failed"),
+            .read_word(AddressSpace::MEM_SIZE)
+            .expect("Read bounds check failed"),
         0x12_34_56_78
     );
 }
@@ -498,16 +503,19 @@ impl<'a> Hart<'a> {
 
     fn execute_sw(&mut self, base: u8, offset: i32, src: u8) -> Result<(), Exception> {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
-        todo!()
+        self.address_space
+            .write_word(addr, self.regs[src as usize] as u32)
     }
 
     fn execute_sh(&mut self, base: u8, offset: i32, src: u8) -> Result<(), Exception> {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
-        todo!()
+        self.address_space
+            .write_halfword(addr, self.regs[src as usize] as u16)
     }
 
     fn execute_sb(&mut self, base: u8, offset: i32, src: u8) -> Result<(), Exception> {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
-        todo!()
+        self.address_space
+            .write_byte(addr, self.regs[src as usize] as u8)
     }
 }
