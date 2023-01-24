@@ -5,12 +5,22 @@
 //! * Tests
 //!
 
-use decode::{BType, IType, JType, RType, UType};
+use std::ops::IndexMut;
+
+use decode::{BType, IType, JType, RType, SType, UType};
+use exception::Exception;
 
 pub type Uxlen = u32;
 pub type Ixlen = i32;
 
 mod decode;
+
+mod exception {
+    #[derive(Debug)]
+    pub enum Exception {
+        AccessFault,
+    }
+}
 
 /// 64 bit byte addressable circular address space.
 ///
@@ -18,12 +28,89 @@ mod decode;
 /// Inaccessable accesses cause an exception.
 ///
 /// Defines byte (1B), halfword(2B), word(4B) or quadword(8B)
-pub struct AddressSpace;
+///
+/// Little endian by design, such that instruction fetches (always LE)
+/// and word fetches work the same.
+pub struct AddressSpace<'a> {
+    /// Maps to 0x10000 - 0x1000000, 16 MB memory
+    main_memory: &'a mut [u8; 0xfe_ff_ff],
+}
+
+impl<'a> AddressSpace<'a> {
+    const MEM_START: Uxlen = 0x1_0000;
+    const MEM_END: Uxlen = 0x100_0000;
+
+    /// `addr` (should, not quite sure) be the lowest memory byte.
+    /// msB add addr+NUMBYTES.
+    ///
+    /// Return &value[0] is the LSB.
+    ///
+    /// This is slightly overengineered, especially for u8, but should optimize out
+    fn address<const NUMBYTES: usize>(
+        &mut self,
+        addr: Uxlen,
+    ) -> Result<&mut [u8; NUMBYTES], Exception> {
+        if addr >= Self::MEM_START && addr < Self::MEM_END - NUMBYTES as Uxlen {
+            let subslice = self.main_memory.index_mut(
+                ((addr - Self::MEM_START) as usize)
+                    ..(addr as usize - Self::MEM_START as usize + NUMBYTES),
+            );
+            Ok(subslice
+                .try_into()
+                .expect("Slice range indexing didn't return length NUMBYTES!"))
+        } else {
+            Err(Exception::AccessFault)
+        }
+    }
+
+    // FIXME: mutable access ?
+    pub fn read_word(&mut self, addr: Uxlen) -> Result<u32, Exception> {
+        let &mut val = self.address(addr)?;
+        Ok(u32::from_le_bytes(val))
+    }
+
+    pub fn read_halfword(&mut self, addr: Uxlen) -> Result<u16, Exception> {
+        let &mut val = self.address(addr)?;
+        Ok(u16::from_le_bytes(val))
+    }
+
+    pub fn read_byte(&mut self, addr: Uxlen) -> Result<u8, Exception> {
+        let &mut val = self.address(addr)?;
+        Ok(u8::from_le_bytes(val))
+    }
+
+    pub fn write_word(&mut self, addr: Uxlen, val: u32) -> Result<(), Exception> {
+        let &mut mut bytes = self.address::<4>(addr)?;
+        bytes.copy_from_slice(val.to_le_bytes().as_slice());
+        Ok(())
+    }
+}
+
+#[test]
+fn mem_test() {
+    let mut mem = vec![0u8; 0xfe_ff_ff];
+    let mut address_space = AddressSpace {
+        main_memory: mem.as_mut_slice().try_into().expect("Wrong memory size"),
+    };
+
+    // FIXME: writing doesn't work
+
+    address_space
+        .write_word(AddressSpace::MEM_START, 0x12_34_56_78)
+        .expect("Bound check failed");
+    assert_eq!(address_space.main_memory[0..4], [0x78, 0x56, 0x34, 0x12]);
+    assert_eq!(
+        address_space
+            .read_word(AddressSpace::MEM_START)
+            .expect("Bounds check failed"),
+        0x12_34_56_78
+    );
+}
 
 /// Hardware Thread
 ///
-pub struct Hart {
-    address_space: AddressSpace,
+pub struct Hart<'a> {
+    address_space: AddressSpace<'a>,
 
     reg_pc: Uxlen,
     /// x0 is always zero
@@ -34,13 +121,7 @@ pub struct Hart {
     regs: [Uxlen; 32],
 }
 
-impl AddressSpace {
-    pub fn read_implicit_word(&self, _addr: Uxlen) -> u32 {
-        0
-    }
-}
-
-impl Hart {
+impl<'a> Hart<'a> {
     /// Fetches, decodes, executes one instruction and increments the PC.
     ///
     /// Backed by `execute_xxx` functions that take the decoded instruction and
@@ -48,9 +129,11 @@ impl Hart {
     /// e.g. the destination register is never 0!
     /// Advancing the PC is done in this function, but some functions might touch
     /// the PC as part of their functionality.
+    ///
+    /// FIXME: Exception handling, i.e. is PC incremented or not??
     ///  
-    pub fn execute_instruction(&mut self) {
-        let instruction = self.address_space.read_implicit_word(self.reg_pc);
+    pub fn execute_instruction(&mut self) -> Result<(), Exception> {
+        let instruction = self.address_space.read_word(self.reg_pc)?;
 
         match decode::get_opcode(instruction) {
             decode::opcode::OP_IMM => 'instr_exec: {
@@ -162,6 +245,28 @@ impl Hart {
                 // Unconditionally increment PC. If branch was taken, 4 was subtracted from the PC.
                 self.reg_pc += 4;
             }
+            decode::opcode::LOAD => {
+                let instr: IType = instruction.into();
+                match instr.funct3 {
+                    0b000 => self.execute_lb(instr.rs1, instr.imm, instr.rd)?,
+                    0b100 => self.execute_lbu(instr.rs1, instr.imm, instr.rd)?,
+                    0b001 => self.execute_lh(instr.rs1, instr.imm, instr.rd)?,
+                    0b101 => self.execute_lhu(instr.rs1, instr.imm, instr.rd)?,
+                    0b010 => self.execute_lw(instr.rs1, instr.imm, instr.rd)?,
+                    _ => log::error!("Unsupported load width!"),
+                }
+                self.reg_pc += 4;
+            }
+            decode::opcode::STORE => {
+                let instr: SType = instruction.into();
+                match instr.funct3 {
+                    0b000 => self.execute_sb(instr.rs1, instr.imm, instr.rs2)?,
+                    0b001 => self.execute_sh(instr.rs1, instr.imm, instr.rs2)?,
+                    0b010 => self.execute_sw(instr.rs1, instr.imm, instr.rs2)?,
+                    _ => log::error!("Unsupported store width!"),
+                }
+                self.reg_pc += 4;
+            }
             _ => {
                 if ((instruction & 0b11) != 0b11) || ((instruction & 0b11100) == 0b11100) {
                     log::error!("Non 32 bit instruction encoding not supported!");
@@ -171,7 +276,9 @@ impl Hart {
                 // Ignore for now, maybe not smart
                 self.reg_pc += 4;
             }
-        }
+        };
+
+        Ok(())
     }
 
     /// This function will be called for Integer Computational Instructions
@@ -360,5 +467,47 @@ impl Hart {
         if (self.regs[src1 as usize] as Uxlen) >= (self.regs[src2 as usize] as Uxlen) {
             self.reg_pc = (self.reg_pc as Ixlen + offset - 4) as Uxlen;
         }
+    }
+
+    // Load/Store
+    fn execute_lw(&mut self, base: u8, offset: i32, dest: u8) -> Result<(), Exception> {
+        let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
+        self.regs[dest as usize] = self.address_space.read_word(addr)?;
+        Ok(())
+    }
+    fn execute_lh(&mut self, base: u8, offset: i32, dest: u8) -> Result<(), Exception> {
+        let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
+        self.regs[dest as usize] = self.address_space.read_halfword(addr)? as i16 as Ixlen as Uxlen;
+        Ok(())
+    }
+    fn execute_lhu(&mut self, base: u8, offset: i32, dest: u8) -> Result<(), Exception> {
+        let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
+        self.regs[dest as usize] = self.address_space.read_word(addr)?;
+        Ok(())
+    }
+    fn execute_lb(&mut self, base: u8, offset: i32, dest: u8) -> Result<(), Exception> {
+        let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
+        self.regs[dest as usize] = self.address_space.read_word(addr)? as i8 as Ixlen as Uxlen;
+        Ok(())
+    }
+    fn execute_lbu(&mut self, base: u8, offset: i32, dest: u8) -> Result<(), Exception> {
+        let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
+        self.regs[dest as usize] = self.address_space.read_word(addr)?;
+        Ok(())
+    }
+
+    fn execute_sw(&mut self, base: u8, offset: i32, src: u8) -> Result<(), Exception> {
+        let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
+        todo!()
+    }
+
+    fn execute_sh(&mut self, base: u8, offset: i32, src: u8) -> Result<(), Exception> {
+        let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
+        todo!()
+    }
+
+    fn execute_sb(&mut self, base: u8, offset: i32, src: u8) -> Result<(), Exception> {
+        let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
+        todo!()
     }
 }

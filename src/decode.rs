@@ -1,4 +1,4 @@
-//! TODO: 2.3 (p16): S type
+//! Section 2.3 (p16): Immediate Encoding Variants
 
 #![allow(dead_code)]
 
@@ -31,7 +31,6 @@ pub(crate) struct IType {
     pub funct3: u8,
     pub rs1: u8,
     pub rd: u8,
-    // TODO: 64 bit ??
     pub imm: Ixlen,
 }
 
@@ -44,6 +43,27 @@ impl From<u32> for IType {
             rd: ((instr >> 7) & 0b1_1111) as u8,
             // Shifting as i32 garantees sign extension
             imm: (instr as i32 >> 20) as Ixlen,
+        }
+    }
+}
+
+pub(crate) struct SType {
+    pub opcode: u8,
+    pub funct3: u8,
+    pub rs1: u8,
+    pub rs2: u8,
+    pub imm: Ixlen,
+}
+
+impl From<u32> for SType {
+    fn from(instr: u32) -> SType {
+        SType {
+            opcode: (instr & 0b111_1111) as u8,
+            funct3: ((instr >> 12) & 0b111) as u8,
+            rs1: ((instr >> 15) & 0b1_1111) as u8,
+            rs2: ((instr >> 20) & 0b1_1111) as u8,
+            imm: ((instr & 0xfe_00_00_00) as i32 >> 20)
+                | ((instr as i32 & 0x00_00_0f_80) >> 7) as Ixlen,
         }
     }
 }
