@@ -3,9 +3,20 @@ use crate::Uxlen;
 use self::exception::Exception;
 
 pub mod exception {
+    /// An exception causes a trap which is either run in a more priviledged mode
+    /// (vertical trap) or at the same priviledge mode (horizontal trap).
     #[derive(Debug)]
     pub enum Exception {
         AccessFault,
+        IllegalInstruction(IllegalInstrCause),
+    }
+
+    // TODO: Do I need this for ISA support or just debugging?
+    #[derive(Debug)]
+    pub enum IllegalInstrCause {
+        CSRNotWritable,
+        CSRNotReadable,
+        CSRNotDefined,
     }
 }
 
@@ -99,4 +110,54 @@ fn mem_test() {
             .expect("Read bounds check failed"),
         0x12_34_56_78
     );
+}
+
+pub enum PriviledgeMode {
+    Machine,
+}
+
+pub struct Csr {
+    /// In this simulation, the cycle, time and instret counter are all the same value.
+    tick_count: u64,
+}
+
+impl Csr {
+    /// The lower 12 bits of `addr` encode the CSR specifier.
+    /// Section 2.2 of the priviledged Spec
+    ///
+    /// The result is zero extended to `Uxlen`.
+    pub fn read(&mut self, addr: u16) -> Result<Uxlen, Exception> {
+        use exception::IllegalInstrCause;
+        match addr {
+            0xC00 => Ok(self.tick_count as Uxlen),         // Cycle
+            0xC01 => Ok(self.tick_count as Uxlen),         // Time
+            0xC02 => Ok(self.tick_count as Uxlen),         // Instruction retired
+            0xC80 => Ok((self.tick_count >> 32) as Uxlen), // Cycle high
+            0xC81 => Ok((self.tick_count >> 32) as Uxlen), // Time high
+            0xC82 => Ok((self.tick_count >> 32) as Uxlen), // Instruction retired high
+            // Other performance counter (0xC00..=0xC9F) are not implemented
+            _ => Err(Exception::IllegalInstruction(
+                IllegalInstrCause::CSRNotDefined,
+            )),
+        }
+    }
+
+    /// The lower 12 bits of `addr` encode the CSR specifier.
+    /// TODO: use Read-Modify-Write?
+    pub fn write(&mut self, addr: u16, _value: Uxlen) -> Result<(), Exception> {
+        use exception::IllegalInstrCause;
+        match addr {
+            // Performance Counters (read only)
+            0xC00..=0xC9F => Err(Exception::IllegalInstruction(
+                IllegalInstrCause::CSRNotWritable,
+            )),
+            _ => Err(Exception::IllegalInstruction(
+                IllegalInstrCause::CSRNotDefined,
+            )),
+        }
+    }
+
+    pub fn increment_tick(&mut self) {
+        self.tick_count += 1;
+    }
 }

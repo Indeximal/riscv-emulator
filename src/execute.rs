@@ -1,10 +1,12 @@
 use crate::decode::{BType, IType, JType, RType, SType, UType};
+use crate::platform::Csr;
 use crate::{decode, platform::exception::Exception, platform::AddressSpace, Ixlen, Uxlen};
 
 /// Hardware Thread
 ///
 pub struct Hart<'a> {
     address_space: AddressSpace<'a>,
+    csr_space: Csr,
 
     reg_pc: Uxlen,
     /// x0 is always zero
@@ -160,6 +162,19 @@ impl<'a> Hart<'a> {
                     _ => log::error!("Unsupported store width!"),
                 }
                 self.reg_pc += 4;
+            }
+            decode::opcode::SYSTEM => {
+                let instr: IType = instruction.into();
+                // The CSR Address space needs the zero extended
+                match instr.funct3 {
+                    0b001 => self.execute_csrrw(instr.imm as u16 & 0xfff, instr.rs1, instr.rd)?,
+                    0b010 => self.execute_csrrs(instr.imm as u16 & 0xfff, instr.rs1, instr.rd)?,
+                    0b011 => self.execute_csrrc(instr.imm as u16 & 0xfff, instr.rs1, instr.rd)?,
+                    0b101 => self.execute_csrrwi(instr.imm as u16 & 0xfff, instr.rs1, instr.rd)?,
+                    0b110 => self.execute_csrrsi(instr.imm as u16 & 0xfff, instr.rs1, instr.rd)?,
+                    0b111 => self.execute_csrrci(instr.imm as u16 & 0xfff, instr.rs1, instr.rd)?,
+                    _ => log::error!("Unsupported system function!"),
+                }
             }
             _ => {
                 if ((instruction & 0b11) != 0b11) || ((instruction & 0b11100) == 0b11100) {
@@ -406,5 +421,88 @@ impl<'a> Hart<'a> {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
         self.address_space
             .write_byte(addr, self.regs[src as usize] as u8)
+    }
+
+    // Zicsr: Control Status Register support.
+    // FIXME: asure atomicity of those instructions
+    /// CSR Read & Write
+    fn execute_csrrw(&mut self, addr: u16, src: u8, dest: u8) -> Result<(), Exception> {
+        if dest == 0 {
+            // Don't read the CSR if the value is discared
+            self.csr_space.write(addr, self.regs[dest as usize])?;
+        } else {
+            let prev = self.csr_space.read(addr)?;
+            self.csr_space.write(addr, self.regs[src as usize])?;
+            self.regs[dest as usize] = prev;
+        }
+        Ok(())
+    }
+
+    /// CSR Read & Set
+    fn execute_csrrs(&mut self, addr: u16, src: u8, dest: u8) -> Result<(), Exception> {
+        let prev = self.csr_space.read(addr)?;
+        if src != 0 {
+            // Don't write the CSR if nothing will change
+            self.csr_space.write(addr, prev | self.regs[src as usize])?;
+        }
+        if dest != 0 {
+            self.regs[dest as usize] = prev;
+        }
+        Ok(())
+    }
+
+    /// CSR Read & Clear
+    fn execute_csrrc(&mut self, addr: u16, src: u8, dest: u8) -> Result<(), Exception> {
+        let prev = self.csr_space.read(addr)?;
+        if src != 0 {
+            // Don't write the CSR if nothing will change
+            self.csr_space
+                .write(addr, prev & !self.regs[src as usize])?;
+        }
+        if dest != 0 {
+            self.regs[dest as usize] = prev;
+        }
+        Ok(())
+    }
+
+    // The immediate Variants use the 5 bits that usually encode the source register.
+    // This will be zero extended. The decode unit garantees `low_imm` is always < 32.
+    /// CSR Read & Write immediate lower 5 bits
+    fn execute_csrrwi(&mut self, addr: u16, low_imm: u8, dest: u8) -> Result<(), Exception> {
+        if dest == 0 {
+            // Don't read the CSR if the value is discared
+            self.csr_space.write(addr, self.regs[dest as usize])?;
+        } else {
+            let prev = self.csr_space.read(addr)?;
+            self.csr_space.write(addr, low_imm as Uxlen)?;
+            self.regs[dest as usize] = prev;
+        }
+        Ok(())
+    }
+
+    /// CSR Read & Set immediate lower 5 bits
+    fn execute_csrrsi(&mut self, addr: u16, low_imm: u8, dest: u8) -> Result<(), Exception> {
+        let prev = self.csr_space.read(addr)?;
+        if low_imm != 0 {
+            // Don't write the CSR if nothing will change
+            self.csr_space.write(addr, prev | (low_imm as Uxlen))?;
+        }
+        if dest != 0 {
+            self.regs[dest as usize] = prev;
+        }
+        Ok(())
+    }
+
+    /// CSR Read & Clear immediate lower 5 bits
+    fn execute_csrrci(&mut self, addr: u16, low_imm: u8, dest: u8) -> Result<(), Exception> {
+        let prev = self.csr_space.read(addr)?;
+        if low_imm != 0 {
+            // Don't write the CSR if nothing will change
+            self.csr_space.write(addr, prev & !(low_imm as Uxlen))?;
+        }
+        if dest != 0 {
+            self.regs[dest as usize] = prev;
+        }
+        Ok(())
     }
 }
