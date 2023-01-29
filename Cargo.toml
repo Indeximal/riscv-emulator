@@ -11,6 +11,7 @@ opt-level = 1
 
 [dependencies]
 log = "0.4.17"
+num_enum = "0.5.9"
 
 # FIXME: Exclusivity
 [features]

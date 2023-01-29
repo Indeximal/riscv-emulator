@@ -1,12 +1,13 @@
 use crate::decode::{BType, IType, JType, RType, SType, UType};
-use crate::platform::Csr;
+use crate::platform::exception::IllegalInstrCause;
+use crate::platform::PlatformState;
 use crate::{decode, platform::exception::Exception, platform::AddressSpace, Ixlen, Uxlen};
 
 /// Hardware Thread
 ///
 pub struct Hart<'a> {
     address_space: AddressSpace<'a>,
-    csr_space: Csr,
+    csr_space: PlatformState,
 
     reg_pc: Uxlen,
     /// x0 is always zero
@@ -28,7 +29,7 @@ impl<'a> Hart<'a> {
     ///
     /// FIXME: Exception handling, i.e. is PC incremented or not??
     ///  
-    pub fn execute_instruction(&mut self) -> Result<(), Exception> {
+    pub fn step_instruction(&mut self) -> Result<(), Exception> {
         let instruction = self.address_space.read_word(self.reg_pc)?;
 
         match decode::get_opcode(instruction) {
@@ -136,7 +137,12 @@ impl<'a> Hart<'a> {
                     0b110 => self.execute_bltu(instr.rs1, instr.rs2, instr.imm),
                     0b101 => self.execute_bge(instr.rs1, instr.rs2, instr.imm),
                     0b111 => self.execute_bgeu(instr.rs1, instr.rs2, instr.imm),
-                    _ => log::error!("Unsupported branch type!"),
+                    _ => {
+                        log::error!("Unsupported branch type!");
+                        return Err(Exception::IllegalInstruction(
+                            IllegalInstrCause::Malformatted,
+                        ));
+                    }
                 }
                 // Unconditionally increment PC. If branch was taken, 4 was subtracted from the PC.
                 self.reg_pc += 4;
@@ -149,7 +155,12 @@ impl<'a> Hart<'a> {
                     0b001 => self.execute_lh(instr.rs1, instr.imm, instr.rd)?,
                     0b101 => self.execute_lhu(instr.rs1, instr.imm, instr.rd)?,
                     0b010 => self.execute_lw(instr.rs1, instr.imm, instr.rd)?,
-                    _ => log::error!("Unsupported load width!"),
+                    _ => {
+                        log::error!("Unsupported load width!");
+                        return Err(Exception::IllegalInstruction(
+                            IllegalInstrCause::Malformatted,
+                        ));
+                    }
                 }
                 self.reg_pc += 4;
             }
@@ -159,13 +170,32 @@ impl<'a> Hart<'a> {
                     0b000 => self.execute_sb(instr.rs1, instr.imm, instr.rs2)?,
                     0b001 => self.execute_sh(instr.rs1, instr.imm, instr.rs2)?,
                     0b010 => self.execute_sw(instr.rs1, instr.imm, instr.rs2)?,
-                    _ => log::error!("Unsupported store width!"),
+                    _ => {
+                        log::error!("Unsupported store width!");
+                        return Err(Exception::IllegalInstruction(
+                            IllegalInstrCause::Malformatted,
+                        ));
+                    }
+                }
+                self.reg_pc += 4;
+            }
+            decode::opcode::MISC_MEM => {
+                let instr: IType = instruction.into();
+                match instr.funct3 {
+                    0b000 => {} // Ignore FENCE instruction
+                    0b001 => {} // Ignore FENCE.I instruction
+                    _ => {
+                        log::error!("Unsupported misc mem instruction!");
+                        return Err(Exception::IllegalInstruction(
+                            IllegalInstrCause::Malformatted,
+                        ));
+                    }
                 }
                 self.reg_pc += 4;
             }
             decode::opcode::SYSTEM => {
                 let instr: IType = instruction.into();
-                // The CSR Address space needs the zero extended
+                // The CSR Address space needs the zero extension
                 match instr.funct3 {
                     0b001 => self.execute_csrrw(instr.imm as u16 & 0xfff, instr.rs1, instr.rd)?,
                     0b010 => self.execute_csrrs(instr.imm as u16 & 0xfff, instr.rs1, instr.rd)?,
@@ -173,8 +203,15 @@ impl<'a> Hart<'a> {
                     0b101 => self.execute_csrrwi(instr.imm as u16 & 0xfff, instr.rs1, instr.rd)?,
                     0b110 => self.execute_csrrsi(instr.imm as u16 & 0xfff, instr.rs1, instr.rd)?,
                     0b111 => self.execute_csrrci(instr.imm as u16 & 0xfff, instr.rs1, instr.rd)?,
-                    _ => log::error!("Unsupported system function!"),
+                    0b000 => return Err(self.execute_system_priv(instr)),
+                    _ => {
+                        log::error!("Unsupported system function!");
+                        return Err(Exception::IllegalInstruction(
+                            IllegalInstrCause::Malformatted,
+                        ));
+                    }
                 }
+                self.reg_pc += 4;
             }
             _ => {
                 if ((instruction & 0b11) != 0b11) || ((instruction & 0b11100) == 0b11100) {
@@ -182,12 +219,29 @@ impl<'a> Hart<'a> {
                 } else {
                     log::error!("Unsupported opcode!")
                 }
-                // Ignore for now, maybe not smart
-                self.reg_pc += 4;
+                return Err(Exception::IllegalInstruction(
+                    IllegalInstrCause::Malformatted,
+                ));
             }
         };
 
         Ok(())
+    }
+
+    fn execute_system_priv(&mut self, instr: IType) -> Exception {
+        // TODO
+        match instr.imm {
+            0 => {}               // TODO: ECALL
+            1 => {}               // TODO: EBREAK
+            0b0001000_00010 => {} // TODO: SRET
+            0b0011000_00010 => {} // TODO: MRET
+            _ => {
+                log::error!("Unsupported system function!");
+                return Exception::IllegalInstruction(IllegalInstrCause::Malformatted);
+            }
+        }
+
+        Exception::RequestedTrap
     }
 
     /// This function will be called for Integer Computational Instructions
