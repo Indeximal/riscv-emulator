@@ -3,7 +3,7 @@ https://riscv.org/technical/specifications/
 
 # Execution Environment Spec
 * ISA: RV32I_Zicsr_Zifencei (currently), Goal is RV64IMAC_Zicsr_Zifencei
-* Priviledge modes: Machine mode only (currently), Goal is 3 level: M, S, U.
+* Priviledge modes: Machine mode and user mode (currently), Goal is 3 level: M, S, U.
 Maybe add Debug mode aswell
 * Address space: phyiscal 16MiB main memory at 0x100_0000 (currently)
 Goal is virtual memory (maybe Phyical Memory Protection PMP)
@@ -12,13 +12,12 @@ Goal is virtual memory (maybe Phyical Memory Protection PMP)
 * TODO: Reset and NonMaskableInterrupt Vector location
 
 # TODO
-* Loading ELF
-* Exceptions
-* Ebreak & syscall
+* Generic Address Space / Memory mapped test output (?)
+* Use Wrapping as the integer type (?)
+* Fix trap return to use `mstatus`
 * M
 * A
 * C
-* Tests
 
 # Goal
 Support running seL4.
@@ -35,6 +34,7 @@ with RISCV-config.
 
 ## TVM rv32ui reverse engineering
 The program should load to 0x80000000, both in 32 and 64 bit, and start execution there.
+However, it is PIC (except for optional memory protection I think).
 
 ### CSRs
 - `mhartid` must read 0, else the test stalls.

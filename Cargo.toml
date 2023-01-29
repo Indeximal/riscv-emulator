@@ -6,6 +6,7 @@ edition = "2021"
 # Enable a small amount of optimization in debug mode
 [profile.dev]
 opt-level = 1
+overflow-checks = false
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -18,3 +19,6 @@ num_enum = "0.5.9"
 default = ["rv32i"]
 rv32i = []
 rv64i = []
+
+[dev-dependencies]
+object = { version = "0.30.3", default-features = false, features = ["read_core", "elf", "std"] }

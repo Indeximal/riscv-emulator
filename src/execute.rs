@@ -1,22 +1,22 @@
 use crate::decode::{get_opcode, opcode, BType, IType, JType, RType, SType, UType};
 use crate::platform::exception::{SynchronousCause, TrapCause};
-use crate::platform::{AddressSpace, PlatformState};
+use crate::platform::{AddressSpace, PlatformState, PriviledgeMode};
 use crate::{Ixlen, Uxlen};
 
 /// Hardware Thread
 pub struct Hart<'a> {
-    address_space: AddressSpace<'a>,
-    execution_env: PlatformState,
+    pub address_space: AddressSpace<'a>,
+    pub execution_env: PlatformState,
 
     /// The program counter. I.e. the address (aligned) to the next
     /// instruction to be executed.
-    reg_pc: Uxlen,
+    pub reg_pc: Uxlen,
     /// x0 is always zero
     /// x1 is usually the return address
     /// x2 is usually the stack pointer
     /// # INVARIANT
     /// regs[0] is always zero!
-    regs: [Uxlen; 32],
+    pub regs: [Uxlen; 32],
 }
 
 type InstrExecResult = Result<(), SynchronousCause>;
@@ -26,18 +26,28 @@ impl<'a> Hart<'a> {
     /// have been executed.
     pub fn run(&mut self, max_instr: usize) {
         for _ in 0..max_instr {
-            if let Err(except) = self.step_instruction() {
-                log::info!("Encountered exception {:?}", except);
-                self.reg_pc = self
-                    .execution_env
-                    .trap(self.reg_pc, TrapCause::Exception(except));
-
-                if matches!(except, SynchronousCause::Breakpoint) {
+            match self.step_instruction() {
+                Err(SynchronousCause::MachineReturn) => {
+                    // This is not a trap!
+                    self.reg_pc = self.execution_env.trap_return();
+                }
+                Err(SynchronousCause::Breakpoint) => {
+                    log::info!("Breaking");
+                    self.reg_pc = self.execution_env.trap(
+                        self.reg_pc,
+                        TrapCause::Exception(SynchronousCause::Breakpoint),
+                    );
+                    // Stop the current run, after switching into the trap.
                     return;
                 }
-            } else {
-                self.execution_env.increment_tick();
-            }
+                Err(except) => {
+                    log::info!("Encountered exception {:?}", except);
+                    self.reg_pc = self
+                        .execution_env
+                        .trap(self.reg_pc, TrapCause::Exception(except));
+                }
+                _ => self.execution_env.increment_tick(),
+            };
         }
     }
 
@@ -62,6 +72,7 @@ impl<'a> Hart<'a> {
                 let instr: IType = instruction.into();
                 if instr.rd == 0 {
                     self.hint(instruction);
+                    self.reg_pc += 4;
                     break 'instr_exec;
                 }
                 match instr.funct3 {
@@ -88,6 +99,7 @@ impl<'a> Hart<'a> {
                 let instr: UType = instruction.into();
                 if instr.rd == 0 {
                     self.hint(instruction);
+                    self.reg_pc += 4;
                     break 'instr_exec;
                 }
                 self.execute_lui(instr.imm, instr.rd);
@@ -97,6 +109,7 @@ impl<'a> Hart<'a> {
                 let instr: UType = instruction.into();
                 if instr.rd == 0 {
                     self.hint(instruction);
+                    self.reg_pc += 4;
                     break 'instr_exec;
                 }
                 self.execute_auipc(instr.imm, instr.rd);
@@ -106,6 +119,7 @@ impl<'a> Hart<'a> {
                 let instr: RType = instruction.into();
                 if instr.rd == 0 {
                     self.hint(instruction);
+                    self.reg_pc += 4;
                     break 'instr_exec;
                 }
                 // FIXME: Warning on illegal funct7
@@ -242,21 +256,25 @@ impl<'a> Hart<'a> {
     }
 
     fn execute_system_priv(&mut self, instr: IType) -> SynchronousCause {
-        // TODO
         match instr.imm {
-            0 => {}               // TODO: ECALL
-            1 => {}               // TODO: EBREAK
-            0b0001000_00010 => {} // TODO: SRET
-            0b0011000_00010 => {} // TODO: MRET
+            // ECALL
+            0 => match self.execution_env.priviledge() {
+                PriviledgeMode::Machine => SynchronousCause::EnvironmentCallFromMmode,
+                PriviledgeMode::User => SynchronousCause::EnvironmentCallFromUmode,
+            },
+            // EBREAK
+            1 => SynchronousCause::Breakpoint,
+            // MRET, this is slightly hacky
+            0b0011000_00010 => match self.execution_env.priviledge() {
+                PriviledgeMode::Machine => SynchronousCause::MachineReturn,
+                PriviledgeMode::User => SynchronousCause::IllegalInstruction,
+            },
+            // TODO: SRET
+            0b0001000_00010 => SynchronousCause::IllegalInstruction,
             _ => {
                 log::error!("Unsupported system function!");
-                return SynchronousCause::IllegalInstruction;
+                SynchronousCause::IllegalInstruction
             }
-        }
-
-        match self.execution_env.priviledge() {
-            crate::platform::PriviledgeMode::Machine => SynchronousCause::EnvironmentCallFromMmode,
-            crate::platform::PriviledgeMode::User => SynchronousCause::EnvironmentCallFromUmode,
         }
     }
 
@@ -501,7 +519,7 @@ impl<'a> Hart<'a> {
         if dest == 0 {
             // Don't read the CSR if the value is discared
             self.execution_env
-                .write_csr(addr, self.regs[dest as usize])?;
+                .write_csr(addr, self.regs[src as usize])?;
         } else {
             let prev = self.execution_env.read_csr(addr)?;
             self.execution_env
@@ -545,8 +563,7 @@ impl<'a> Hart<'a> {
     fn execute_csrrwi(&mut self, addr: u16, low_imm: u8, dest: u8) -> InstrExecResult {
         if dest == 0 {
             // Don't read the CSR if the value is discared
-            self.execution_env
-                .write_csr(addr, self.regs[dest as usize])?;
+            self.execution_env.write_csr(addr, low_imm as Uxlen)?;
         } else {
             let prev = self.execution_env.read_csr(addr)?;
             self.execution_env.write_csr(addr, low_imm as Uxlen)?;

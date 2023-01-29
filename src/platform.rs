@@ -32,7 +32,10 @@ pub mod exception {
         StoreAMOPageFault = 15,
         /// Custom cause upon reset
         Reset = 24,
+        /// Custom cause, when software tries to set the field to an unsupported value.
         Unsupported = 25,
+        /// This isn't a Trap!! Its a "reverse-trap" of sorts.
+        MachineReturn = 26,
     }
 
     // Interrupt bit 1
@@ -45,7 +48,7 @@ pub mod exception {
         MachineTimerInterrupt = 7,
         SupervisorExternalInterrupt = 9,
         MachineExternalInterrupt = 11,
-        // Custom cause, when software tries to set the field
+        /// Custom cause, when software tries to set the field to an unsupported value.
         Unsupported = 16,
     }
 
@@ -139,7 +142,8 @@ pub mod exception {
 /// and word fetches work the same.
 pub struct AddressSpace<'a> {
     /// Maps to 0x100_0000 - 0x1ff_ffff, 16 MB memory
-    main_memory: &'a mut [u8; 0x100_0000],
+    // FIXME: not public
+    pub main_memory: &'a mut [u8; 0x100_0000],
 }
 
 impl<'a> AddressSpace<'a> {
@@ -372,6 +376,23 @@ impl PlatformState {
                 TrapCause::Exception(ecause) => base + 4 * ecause as Uxlen,
             },
         }
+    }
+
+    /// Returns from a (machine) trap.
+    /// TODO: SRET
+    ///
+    /// TODO: push & pop mstatus fields.
+    /// quote: An MRET or SRET instruction is used to return from a trap in M-mode or S-mode respectively.
+    /// When executing an x RET instruction, supposing x PP holds the value y, x IE is set to x PIE; the
+    /// privilege mode is changed to y; x PIE is set to 1; and x PP is set to the least-privileged supported
+    /// mode (U if U-mode is implemented, else M). If x PP̸=M, x RET also sets MPRV=0
+    ///
+    /// Returns the intruction address prior to the trap handler, continue executing there.
+    pub fn trap_return(&mut self) -> Uxlen {
+        // FIXME: This is in general not the case.
+        self.priviledge = PriviledgeMode::User;
+
+        self.csr_mepc
     }
 
     pub fn increment_tick(&mut self) {
