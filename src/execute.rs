@@ -379,45 +379,45 @@ impl<'a> Hart<'a> {
     }
 
     // Load/Store
-    fn execute_lw(&mut self, base: u8, offset: i32, dest: u8) -> Result<(), Exception> {
+    fn execute_lw(&mut self, base: u8, offset: Ixlen, dest: u8) -> Result<(), Exception> {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
         self.regs[dest as usize] = self.address_space.read_word(addr)?;
         Ok(())
     }
-    fn execute_lh(&mut self, base: u8, offset: i32, dest: u8) -> Result<(), Exception> {
+    fn execute_lh(&mut self, base: u8, offset: Ixlen, dest: u8) -> Result<(), Exception> {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
         self.regs[dest as usize] = self.address_space.read_halfword(addr)? as i16 as Ixlen as Uxlen;
         Ok(())
     }
-    fn execute_lhu(&mut self, base: u8, offset: i32, dest: u8) -> Result<(), Exception> {
+    fn execute_lhu(&mut self, base: u8, offset: Ixlen, dest: u8) -> Result<(), Exception> {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
         self.regs[dest as usize] = self.address_space.read_word(addr)?;
         Ok(())
     }
-    fn execute_lb(&mut self, base: u8, offset: i32, dest: u8) -> Result<(), Exception> {
+    fn execute_lb(&mut self, base: u8, offset: Ixlen, dest: u8) -> Result<(), Exception> {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
         self.regs[dest as usize] = self.address_space.read_word(addr)? as i8 as Ixlen as Uxlen;
         Ok(())
     }
-    fn execute_lbu(&mut self, base: u8, offset: i32, dest: u8) -> Result<(), Exception> {
+    fn execute_lbu(&mut self, base: u8, offset: Ixlen, dest: u8) -> Result<(), Exception> {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
         self.regs[dest as usize] = self.address_space.read_word(addr)?;
         Ok(())
     }
 
-    fn execute_sw(&mut self, base: u8, offset: i32, src: u8) -> Result<(), Exception> {
+    fn execute_sw(&mut self, base: u8, offset: Ixlen, src: u8) -> Result<(), Exception> {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
         self.address_space
             .write_word(addr, self.regs[src as usize] as u32)
     }
 
-    fn execute_sh(&mut self, base: u8, offset: i32, src: u8) -> Result<(), Exception> {
+    fn execute_sh(&mut self, base: u8, offset: Ixlen, src: u8) -> Result<(), Exception> {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
         self.address_space
             .write_halfword(addr, self.regs[src as usize] as u16)
     }
 
-    fn execute_sb(&mut self, base: u8, offset: i32, src: u8) -> Result<(), Exception> {
+    fn execute_sb(&mut self, base: u8, offset: Ixlen, src: u8) -> Result<(), Exception> {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
         self.address_space
             .write_byte(addr, self.regs[src as usize] as u8)

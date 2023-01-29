@@ -11,3 +11,9 @@ opt-level = 1
 
 [dependencies]
 log = "0.4.17"
+
+# FIXME: Exclusivity
+[features]
+default = ["rv32i"]
+rv32i = []
+rv64i = []

@@ -17,6 +17,7 @@ Goal is virtual memory (maybe Phyical Memory Protection PMP)
 * C
 * Exceptions
 * Tests
+* Ebreak & syscall
 
 # Goal
 Support running seL4.

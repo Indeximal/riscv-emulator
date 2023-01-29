@@ -62,8 +62,8 @@ impl From<u32> for SType {
             funct3: ((instr >> 12) & 0b111) as u8,
             rs1: ((instr >> 15) & 0b1_1111) as u8,
             rs2: ((instr >> 20) & 0b1_1111) as u8,
-            imm: ((instr & 0xfe_00_00_00) as i32 >> 20)
-                | ((instr as i32 & 0x00_00_0f_80) >> 7) as Ixlen,
+            imm: ((instr & 0xfe_00_00_00) as i32 as Ixlen >> 20)
+                | ((instr & 0x0f_80) >> 7) as Ixlen,
         }
     }
 }
@@ -81,7 +81,7 @@ impl From<u32> for UType {
             opcode: (instr & 0b111_1111) as u8,
             rd: ((instr >> 7) & 0b1_1111) as u8,
             // Place into upper 20 bits. FIXME: 64bit
-            imm: instr & 0xff_ff_f0_00,
+            imm: (instr & 0xff_ff_f0_00) as i32 as Ixlen as Uxlen,
         }
     }
 }
