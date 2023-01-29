@@ -1,29 +1,10 @@
 use crate::Uxlen;
 
-use self::exception::{Exception, SynchronousCause, TrapCause};
+use self::exception::{SynchronousCause, TrapCause};
 
 pub mod exception {
-    use num_enum::TryFromPrimitive;
-
     use crate::{Ixlen, Uxlen};
-
-    /// An exception causes a trap which is either run in a more priviledged mode
-    /// (vertical trap) or at the same priviledge mode (horizontal trap).
-    #[derive(Debug)]
-    pub enum Exception {
-        RequestedTrap,
-        AccessFault,
-        IllegalInstruction(IllegalInstrCause),
-    }
-
-    // TODO: Do I need this for ISA support or just debugging?
-    #[derive(Debug)]
-    pub enum IllegalInstrCause {
-        Malformatted,
-        CSRNotWritable,
-        CSRNotReadable,
-        CSRNotDefined,
-    }
+    use num_enum::TryFromPrimitive;
 
     #[derive(Debug, Clone, Copy)]
     pub enum TrapCause {
@@ -35,7 +16,7 @@ pub mod exception {
     #[derive(Debug, Clone, Copy, TryFromPrimitive)]
     #[repr(u32)]
     pub enum SynchronousCause {
-        InstructionAddressMisaligne = 0,
+        InstructionAddressMisaligned = 0,
         InstructionAccessFault = 1,
         IllegalInstruction = 2,
         Breakpoint = 3,
@@ -68,6 +49,17 @@ pub mod exception {
         Unsupported = 16,
     }
 
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) enum TrapVector {
+        /// Both synchronous and asynchronous traps set the PC to the inner value.
+        /// Inner is garanteed 4 aligned. Mode = 0.
+        Direct(Uxlen),
+        /// Both synchronous traps set the PC to the inner value.
+        /// Asynchronous traps set the PC to the inner value + 4 * mcause.
+        /// Inner is garanteed 4 aligned. Mode = 1.
+        Vectored(Uxlen),
+    }
+
     impl Into<u32> for TrapCause {
         fn into(self) -> u32 {
             match self {
@@ -89,6 +81,7 @@ pub mod exception {
     impl From<Uxlen> for TrapCause {
         /// Cast any value into a supported cause while respecting the interrupt flag.
         fn from(value: Uxlen) -> Self {
+            // XLEN independent msb check
             if (value as Ixlen) < 0 {
                 TrapCause::Interrupt(
                     InterruptCause::try_from(value & 0xff_ff)
@@ -98,6 +91,28 @@ pub mod exception {
                 TrapCause::Exception(
                     SynchronousCause::try_from(value).unwrap_or(SynchronousCause::Unsupported),
                 )
+            }
+        }
+    }
+
+    impl Into<Uxlen> for TrapVector {
+        fn into(self) -> Uxlen {
+            match self {
+                TrapVector::Direct(base) => base & !0b11,
+                TrapVector::Vectored(base) => base & !0b11 + 1,
+            }
+        }
+    }
+
+    impl TryFrom<Uxlen> for TrapVector {
+        type Error = ();
+
+        fn try_from(value: Uxlen) -> Result<Self, Self::Error> {
+            let base = value & !0b11;
+            match value & 0b11 {
+                0 => Ok(TrapVector::Direct(base)),
+                1 => Ok(TrapVector::Vectored(base)),
+                _ => Err(()),
             }
         }
     }
@@ -131,18 +146,20 @@ impl<'a> AddressSpace<'a> {
     const MEM_SIZE: Uxlen = 1 << 24;
 
     /// This might need optimizations, e.g. Const generics for width
-    fn address(&self, addr: Uxlen, width: usize) -> Result<usize, Exception> {
+    fn address(&self, addr: Uxlen, width: usize) -> Result<usize, ()> {
         if addr & !(Self::MEM_SIZE - 1) == Self::MEM_SIZE
             && (addr + width as Uxlen - 1) & !(Self::MEM_SIZE - 1) == Self::MEM_SIZE
         {
             Ok((addr & (Self::MEM_SIZE - 1)) as usize)
         } else {
-            Err(Exception::AccessFault)
+            Err(())
         }
     }
 
-    pub fn read_word(&self, addr: Uxlen) -> Result<u32, Exception> {
-        let lsb_index = self.address(addr, 4)?;
+    pub fn read_word(&self, addr: Uxlen) -> Result<u32, SynchronousCause> {
+        let lsb_index = self
+            .address(addr, 4)
+            .map_err(|_| SynchronousCause::LoadAccessFault)?;
         Ok(u32::from_le_bytes(
             self.main_memory[lsb_index..lsb_index + 4]
                 .try_into()
@@ -150,8 +167,10 @@ impl<'a> AddressSpace<'a> {
         ))
     }
 
-    pub fn read_halfword(&self, addr: Uxlen) -> Result<u16, Exception> {
-        let lsb_index = self.address(addr, 2)?;
+    pub fn read_halfword(&self, addr: Uxlen) -> Result<u16, SynchronousCause> {
+        let lsb_index = self
+            .address(addr, 2)
+            .map_err(|_| SynchronousCause::LoadAccessFault)?;
         Ok(u16::from_le_bytes(
             self.main_memory[lsb_index..lsb_index + 2]
                 .try_into()
@@ -159,27 +178,35 @@ impl<'a> AddressSpace<'a> {
         ))
     }
 
-    pub fn read_byte(&self, addr: Uxlen) -> Result<u8, Exception> {
-        let lsb_index = self.address(addr, 1)?;
+    pub fn read_byte(&self, addr: Uxlen) -> Result<u8, SynchronousCause> {
+        let lsb_index = self
+            .address(addr, 1)
+            .map_err(|_| SynchronousCause::LoadAccessFault)?;
         Ok(self.main_memory[lsb_index])
     }
 
-    pub fn write_word(&mut self, addr: Uxlen, val: u32) -> Result<(), Exception> {
-        let lsb_index = self.address(addr, 4)?;
+    pub fn write_word(&mut self, addr: Uxlen, val: u32) -> Result<(), SynchronousCause> {
+        let lsb_index = self
+            .address(addr, 4)
+            .map_err(|_| SynchronousCause::StoreAMOAccessFault)?;
         self.main_memory[lsb_index..lsb_index + 4].copy_from_slice(&val.to_le_bytes());
 
         Ok(())
     }
 
-    pub fn write_halfword(&mut self, addr: Uxlen, val: u16) -> Result<(), Exception> {
-        let lsb_index = self.address(addr, 2)?;
+    pub fn write_halfword(&mut self, addr: Uxlen, val: u16) -> Result<(), SynchronousCause> {
+        let lsb_index = self
+            .address(addr, 2)
+            .map_err(|_| SynchronousCause::StoreAMOAccessFault)?;
         self.main_memory[lsb_index..lsb_index + 2].copy_from_slice(&val.to_le_bytes());
 
         Ok(())
     }
 
-    pub fn write_byte(&mut self, addr: Uxlen, val: u8) -> Result<(), Exception> {
-        let lsb_index = self.address(addr, 2)?;
+    pub fn write_byte(&mut self, addr: Uxlen, val: u8) -> Result<(), SynchronousCause> {
+        let lsb_index = self
+            .address(addr, 2)
+            .map_err(|_| SynchronousCause::StoreAMOAccessFault)?;
         self.main_memory[lsb_index] = val;
 
         Ok(())
@@ -215,32 +242,6 @@ pub enum PriviledgeMode {
     User,
 }
 
-/// Table 3.2 in priviledged ISA
-///
-/// Z extensions are not present in this register.
-#[allow(dead_code)]
-mod isa_flags {
-    use crate::Uxlen;
-
-    pub const A: Uxlen = 1 << 0; // Atomic extension
-    pub const B: Uxlen = 1 << 1; // Tentatively reserved for Bit-Manipulation extension
-    pub const C: Uxlen = 1 << 2; // Compressed extension
-    pub const D: Uxlen = 1 << 3; // Double-precision floating-point extension
-    pub const E: Uxlen = 1 << 4; // RV32E base ISA
-    pub const F: Uxlen = 1 << 5; // Single-precision floating-point extension
-    pub const H: Uxlen = 1 << 7; // Hypervisor extension
-    pub const I: Uxlen = 1 << 8; // RV32I/64I/128I base ISA
-    pub const J: Uxlen = 1 << 9; // Tentatively reserved for Dynamically Translated Languages extension
-    pub const M: Uxlen = 1 << 12; // Integer Multiply/Divide extension
-    pub const N: Uxlen = 1 << 13; // Tentatively reserved for User-Level Interrupts extension
-    pub const P: Uxlen = 1 << 15; // Tentatively reserved for Packed-SIMD extension
-    pub const Q: Uxlen = 1 << 16; // Quad-precision floating-point extension
-    pub const S: Uxlen = 1 << 18; // Supervisor mode implemented
-    pub const U: Uxlen = 1 << 20; // User mode implemented
-    pub const V: Uxlen = 1 << 21; // Tentatively reserved for Vector extension
-    pub const X: Uxlen = 1 << 23; // Non-standard extensions present
-}
-
 pub struct PlatformState {
     /// Hart Id. Zero in single core system. Keep low, but unique.
     csr_mhartid: Uxlen,
@@ -258,7 +259,7 @@ pub struct PlatformState {
     /// TODO: Write on taking a trap
     csr_mepc: Uxlen,
     /// Specifies the behaviour of a trap into machine mode.
-    csr_mtvec: TrapVector,
+    csr_mtvec: exception::TrapVector,
     /// Cause of the latest trap into machine mode.
     csr_mcause: TrapCause,
 }
@@ -269,13 +270,13 @@ impl Default for PlatformState {
         Self {
             csr_mhartid: 0,
             // FIXME: dynamic 64 bit
-            csr_misa: (1 << 30) | isa_flags::I | isa_flags::U,
+            csr_misa: (1 << 30) | crate::isa_flags::I | crate::isa_flags::U,
             tick_count: 0,
             // Unspecified after reset
             csr_mepc: 0,
             priviledge: PriviledgeMode::Machine,
             // Unspecified after reset
-            csr_mtvec: TrapVector::Direct(0),
+            csr_mtvec: exception::TrapVector::Direct(0),
             csr_mcause: TrapCause::Exception(SynchronousCause::Reset),
         }
     }
@@ -286,9 +287,7 @@ impl PlatformState {
     /// Section 2.2 of the priviledged Spec
     ///
     /// The result is zero extended to `Uxlen`.
-    pub fn read(&mut self, addr: u16) -> Result<Uxlen, Exception> {
-        use exception::Exception::IllegalInstruction;
-        use exception::IllegalInstrCause::*;
+    pub fn read_csr(&mut self, addr: u16) -> Result<Uxlen, SynchronousCause> {
         use PriviledgeMode::*;
 
         match (self.priviledge, addr) {
@@ -313,20 +312,18 @@ impl PlatformState {
             (Machine, 0xF13) => Ok(0x13_09_B9_5C), // Implementation id. Randomly chosen
             (Machine, 0xF14) => Ok(self.csr_mhartid), // Hart id
             // Unrecognised or unallowed CSR access
-            _ => Err(IllegalInstruction(CSRNotDefined)),
+            _ => Err(SynchronousCause::IllegalInstruction),
         }
     }
 
     /// The lower 12 bits of `addr` encode the CSR specifier.
     /// TODO: use Read-Modify-Write?
-    pub fn write(&mut self, addr: u16, value: Uxlen) -> Result<(), Exception> {
-        use exception::Exception::IllegalInstruction;
-        use exception::IllegalInstrCause::*;
+    pub fn write_csr(&mut self, addr: u16, value: Uxlen) -> Result<(), SynchronousCause> {
         use PriviledgeMode::*;
 
         match (self.priviledge, addr) {
             // Performance Counters (read only)
-            (_, 0xC00..=0xC9F) => Err(IllegalInstruction(CSRNotWritable)),
+            (_, 0xC00..=0xC9F) => Err(SynchronousCause::IllegalInstruction),
             // Trap handling
             (Machine, 0x305) => {
                 // Set machine trap vector address, ignore unsupported modes
@@ -352,9 +349,28 @@ impl PlatformState {
             (Machine, 0x344) => Ok(()), // Machine interrupt enable
             // Static platform information (read only in this implementation)
             (Machine, 0x301) => Ok(()), // Ignore misa write
-            (Machine, 0xF11..=0xF14) => Err(IllegalInstruction(CSRNotWritable)),
+            (Machine, 0xF11..=0xF14) => Err(SynchronousCause::IllegalInstruction),
             // Unrecognised or unallowed CSR access
-            _ => Err(IllegalInstruction(CSRNotDefined)),
+            _ => Err(SynchronousCause::IllegalInstruction),
+        }
+    }
+
+    /// Registers a trap in the platform state.
+    /// Returns the intruction address of the trap handler, continue executing there.
+    pub fn trap(&mut self, addr: Uxlen, cause: TrapCause) -> Uxlen {
+        // FIXME: check specs for things I forgot here??
+        // TODO: Supervisor delegate?
+        self.csr_mcause = cause;
+        self.csr_mepc = addr;
+
+        self.priviledge = PriviledgeMode::Machine;
+
+        match self.csr_mtvec {
+            exception::TrapVector::Direct(base) => base,
+            exception::TrapVector::Vectored(base) => match cause {
+                TrapCause::Interrupt(_) => base,
+                TrapCause::Exception(ecause) => base + 4 * ecause as Uxlen,
+            },
         }
     }
 
@@ -364,38 +380,5 @@ impl PlatformState {
 
     pub fn priviledge(&self) -> PriviledgeMode {
         self.priviledge
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum TrapVector {
-    /// Both synchronous and asynchronous traps set the PC to the inner value.
-    /// Inner is garanteed 4 aligned. Mode = 0.
-    Direct(Uxlen),
-    /// Both synchronous traps set the PC to the inner value.
-    /// Asynchronous traps set the PC to the inner value + 4 * mcause.
-    /// Inner is garanteed 4 aligned. Mode = 1.
-    Vectored(Uxlen),
-}
-
-impl Into<Uxlen> for TrapVector {
-    fn into(self) -> Uxlen {
-        match self {
-            TrapVector::Direct(base) => base & !0b11,
-            TrapVector::Vectored(base) => base & !0b11 + 1,
-        }
-    }
-}
-
-impl TryFrom<Uxlen> for TrapVector {
-    type Error = ();
-
-    fn try_from(value: Uxlen) -> Result<Self, Self::Error> {
-        let base = value & !0b11;
-        match value & 0b11 {
-            0 => Ok(TrapVector::Direct(base)),
-            1 => Ok(TrapVector::Vectored(base)),
-            _ => Err(()),
-        }
     }
 }

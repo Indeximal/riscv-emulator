@@ -1,4 +1,6 @@
-//! Section 2.3 (p16): Immediate Encoding Variants
+//! Provides structions that can be used to decode machine code.
+//!
+//! See Section 2.3: Immediate Encoding Variants of the Unpriviledged Spec
 
 #![allow(dead_code)]
 

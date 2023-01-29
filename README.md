@@ -12,6 +12,7 @@ Goal is virtual memory (maybe Phyical Memory Protection PMP)
 * TODO: Reset and NonMaskableInterrupt Vector location
 
 # TODO
+* Loading ELF
 * Exceptions
 * Ebreak & syscall
 * M

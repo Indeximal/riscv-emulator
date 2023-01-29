@@ -1,14 +1,15 @@
-use crate::decode::{BType, IType, JType, RType, SType, UType};
-use crate::platform::exception::IllegalInstrCause;
-use crate::platform::PlatformState;
-use crate::{decode, platform::exception::Exception, platform::AddressSpace, Ixlen, Uxlen};
+use crate::decode::{get_opcode, opcode, BType, IType, JType, RType, SType, UType};
+use crate::platform::exception::{SynchronousCause, TrapCause};
+use crate::platform::{AddressSpace, PlatformState};
+use crate::{Ixlen, Uxlen};
 
 /// Hardware Thread
-///
 pub struct Hart<'a> {
     address_space: AddressSpace<'a>,
-    csr_space: PlatformState,
+    execution_env: PlatformState,
 
+    /// The program counter. I.e. the address (aligned) to the next
+    /// instruction to be executed.
     reg_pc: Uxlen,
     /// x0 is always zero
     /// x1 is usually the return address
@@ -18,22 +19,46 @@ pub struct Hart<'a> {
     regs: [Uxlen; 32],
 }
 
+type InstrExecResult = Result<(), SynchronousCause>;
+
 impl<'a> Hart<'a> {
+    /// Advances the hart until a breakpoint or until `max_instr` dynamic instruction
+    /// have been executed.
+    pub fn run(&mut self, max_instr: usize) {
+        for _ in 0..max_instr {
+            if let Err(except) = self.step_instruction() {
+                log::info!("Encountered exception {:?}", except);
+                self.reg_pc = self
+                    .execution_env
+                    .trap(self.reg_pc, TrapCause::Exception(except));
+
+                if matches!(except, SynchronousCause::Breakpoint) {
+                    return;
+                }
+            } else {
+                self.execution_env.increment_tick();
+            }
+        }
+    }
+
     /// Fetches, decodes, executes one instruction and increments the PC.
     ///
     /// Backed by `execute_xxx` functions that take the decoded instruction and
     /// apply it to the architectural state. They assume proper decoding,
-    /// e.g. the destination register is never 0!
+    /// e.g. the destination register is never 0 for Integer Computation Instructions.
     /// Advancing the PC is done in this function, but some functions might touch
     /// the PC as part of their functionality.
     ///
-    /// FIXME: Exception handling, i.e. is PC incremented or not??
-    ///  
-    pub fn step_instruction(&mut self) -> Result<(), Exception> {
-        let instruction = self.address_space.read_word(self.reg_pc)?;
+    /// Returns a [`SynchronousCause`] if the instruction couldn't execute due to
+    /// an exception or requested a environment call.
+    pub fn step_instruction(&mut self) -> InstrExecResult {
+        let instruction = self
+            .address_space
+            .read_word(self.reg_pc)
+            .map_err(|_| SynchronousCause::InstructionAccessFault)?;
 
-        match decode::get_opcode(instruction) {
-            decode::opcode::OP_IMM => 'instr_exec: {
+        match get_opcode(instruction) {
+            opcode::OP_IMM => 'instr_exec: {
                 let instr: IType = instruction.into();
                 if instr.rd == 0 {
                     self.hint(instruction);
@@ -59,7 +84,7 @@ impl<'a> Hart<'a> {
                 }
                 self.reg_pc += 4;
             }
-            decode::opcode::LUI => 'instr_exec: {
+            opcode::LUI => 'instr_exec: {
                 let instr: UType = instruction.into();
                 if instr.rd == 0 {
                     self.hint(instruction);
@@ -68,7 +93,7 @@ impl<'a> Hart<'a> {
                 self.execute_lui(instr.imm, instr.rd);
                 self.reg_pc += 4;
             }
-            decode::opcode::AUIPC => 'instr_exec: {
+            opcode::AUIPC => 'instr_exec: {
                 let instr: UType = instruction.into();
                 if instr.rd == 0 {
                     self.hint(instruction);
@@ -77,7 +102,7 @@ impl<'a> Hart<'a> {
                 self.execute_auipc(instr.imm, instr.rd);
                 self.reg_pc += 4;
             }
-            decode::opcode::OP => 'instr_exec: {
+            opcode::OP => 'instr_exec: {
                 let instr: RType = instruction.into();
                 if instr.rd == 0 {
                     self.hint(instruction);
@@ -109,7 +134,7 @@ impl<'a> Hart<'a> {
                 }
                 self.reg_pc += 4;
             }
-            decode::opcode::JAL => {
+            opcode::JAL => {
                 let instr: JType = instruction.into();
                 if instr.rd == 0 {
                     // Jump
@@ -119,7 +144,7 @@ impl<'a> Hart<'a> {
                 }
                 // No PC increment needed
             }
-            decode::opcode::JALR => {
+            opcode::JALR => {
                 let instr: IType = instruction.into();
                 if instr.rd == 0 {
                     self.execute_jr(instr.imm, instr.rs1);
@@ -128,7 +153,7 @@ impl<'a> Hart<'a> {
                 }
                 // No PC increment needed
             }
-            decode::opcode::BRANCH => {
+            opcode::BRANCH => {
                 let instr: BType = instruction.into();
                 match instr.funct3 {
                     0b000 => self.execute_beq(instr.rs1, instr.rs2, instr.imm),
@@ -139,15 +164,13 @@ impl<'a> Hart<'a> {
                     0b111 => self.execute_bgeu(instr.rs1, instr.rs2, instr.imm),
                     _ => {
                         log::error!("Unsupported branch type!");
-                        return Err(Exception::IllegalInstruction(
-                            IllegalInstrCause::Malformatted,
-                        ));
+                        return Err(SynchronousCause::IllegalInstruction);
                     }
                 }
                 // Unconditionally increment PC. If branch was taken, 4 was subtracted from the PC.
                 self.reg_pc += 4;
             }
-            decode::opcode::LOAD => {
+            opcode::LOAD => {
                 let instr: IType = instruction.into();
                 match instr.funct3 {
                     0b000 => self.execute_lb(instr.rs1, instr.imm, instr.rd)?,
@@ -157,14 +180,12 @@ impl<'a> Hart<'a> {
                     0b010 => self.execute_lw(instr.rs1, instr.imm, instr.rd)?,
                     _ => {
                         log::error!("Unsupported load width!");
-                        return Err(Exception::IllegalInstruction(
-                            IllegalInstrCause::Malformatted,
-                        ));
+                        return Err(SynchronousCause::IllegalInstruction);
                     }
                 }
                 self.reg_pc += 4;
             }
-            decode::opcode::STORE => {
+            opcode::STORE => {
                 let instr: SType = instruction.into();
                 match instr.funct3 {
                     0b000 => self.execute_sb(instr.rs1, instr.imm, instr.rs2)?,
@@ -172,28 +193,24 @@ impl<'a> Hart<'a> {
                     0b010 => self.execute_sw(instr.rs1, instr.imm, instr.rs2)?,
                     _ => {
                         log::error!("Unsupported store width!");
-                        return Err(Exception::IllegalInstruction(
-                            IllegalInstrCause::Malformatted,
-                        ));
+                        return Err(SynchronousCause::IllegalInstruction);
                     }
                 }
                 self.reg_pc += 4;
             }
-            decode::opcode::MISC_MEM => {
+            opcode::MISC_MEM => {
                 let instr: IType = instruction.into();
                 match instr.funct3 {
                     0b000 => {} // Ignore FENCE instruction
                     0b001 => {} // Ignore FENCE.I instruction
                     _ => {
                         log::error!("Unsupported misc mem instruction!");
-                        return Err(Exception::IllegalInstruction(
-                            IllegalInstrCause::Malformatted,
-                        ));
+                        return Err(SynchronousCause::IllegalInstruction);
                     }
                 }
                 self.reg_pc += 4;
             }
-            decode::opcode::SYSTEM => {
+            opcode::SYSTEM => {
                 let instr: IType = instruction.into();
                 // The CSR Address space needs the zero extension
                 match instr.funct3 {
@@ -206,9 +223,7 @@ impl<'a> Hart<'a> {
                     0b000 => return Err(self.execute_system_priv(instr)),
                     _ => {
                         log::error!("Unsupported system function!");
-                        return Err(Exception::IllegalInstruction(
-                            IllegalInstrCause::Malformatted,
-                        ));
+                        return Err(SynchronousCause::IllegalInstruction);
                     }
                 }
                 self.reg_pc += 4;
@@ -219,16 +234,14 @@ impl<'a> Hart<'a> {
                 } else {
                     log::error!("Unsupported opcode!")
                 }
-                return Err(Exception::IllegalInstruction(
-                    IllegalInstrCause::Malformatted,
-                ));
+                return Err(SynchronousCause::IllegalInstruction);
             }
         };
 
         Ok(())
     }
 
-    fn execute_system_priv(&mut self, instr: IType) -> Exception {
+    fn execute_system_priv(&mut self, instr: IType) -> SynchronousCause {
         // TODO
         match instr.imm {
             0 => {}               // TODO: ECALL
@@ -237,11 +250,14 @@ impl<'a> Hart<'a> {
             0b0011000_00010 => {} // TODO: MRET
             _ => {
                 log::error!("Unsupported system function!");
-                return Exception::IllegalInstruction(IllegalInstrCause::Malformatted);
+                return SynchronousCause::IllegalInstruction;
             }
         }
 
-        Exception::RequestedTrap
+        match self.execution_env.priviledge() {
+            crate::platform::PriviledgeMode::Machine => SynchronousCause::EnvironmentCallFromMmode,
+            crate::platform::PriviledgeMode::User => SynchronousCause::EnvironmentCallFromUmode,
+        }
     }
 
     /// This function will be called for Integer Computational Instructions
@@ -254,7 +270,7 @@ impl<'a> Hart<'a> {
     ///
     /// See Section 2.9: Hint instruction
     fn hint(&mut self, instr: u32) {
-        if instr == decode::opcode::OP_IMM as u32 {
+        if instr == opcode::OP_IMM as u32 {
             // NOP encoded as `ADDI x0, x0, 0`
             return;
         }
@@ -433,45 +449,46 @@ impl<'a> Hart<'a> {
     }
 
     // Load/Store
-    fn execute_lw(&mut self, base: u8, offset: Ixlen, dest: u8) -> Result<(), Exception> {
+    fn execute_lw(&mut self, base: u8, offset: Ixlen, dest: u8) -> InstrExecResult {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
         self.regs[dest as usize] = self.address_space.read_word(addr)?;
         Ok(())
     }
-    fn execute_lh(&mut self, base: u8, offset: Ixlen, dest: u8) -> Result<(), Exception> {
+    fn execute_lh(&mut self, base: u8, offset: Ixlen, dest: u8) -> InstrExecResult {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
+        // Sign extend output
         self.regs[dest as usize] = self.address_space.read_halfword(addr)? as i16 as Ixlen as Uxlen;
         Ok(())
     }
-    fn execute_lhu(&mut self, base: u8, offset: Ixlen, dest: u8) -> Result<(), Exception> {
+    fn execute_lhu(&mut self, base: u8, offset: Ixlen, dest: u8) -> InstrExecResult {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
         self.regs[dest as usize] = self.address_space.read_word(addr)?;
         Ok(())
     }
-    fn execute_lb(&mut self, base: u8, offset: Ixlen, dest: u8) -> Result<(), Exception> {
+    fn execute_lb(&mut self, base: u8, offset: Ixlen, dest: u8) -> InstrExecResult {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
         self.regs[dest as usize] = self.address_space.read_word(addr)? as i8 as Ixlen as Uxlen;
         Ok(())
     }
-    fn execute_lbu(&mut self, base: u8, offset: Ixlen, dest: u8) -> Result<(), Exception> {
+    fn execute_lbu(&mut self, base: u8, offset: Ixlen, dest: u8) -> InstrExecResult {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
         self.regs[dest as usize] = self.address_space.read_word(addr)?;
         Ok(())
     }
 
-    fn execute_sw(&mut self, base: u8, offset: Ixlen, src: u8) -> Result<(), Exception> {
+    fn execute_sw(&mut self, base: u8, offset: Ixlen, src: u8) -> InstrExecResult {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
         self.address_space
             .write_word(addr, self.regs[src as usize] as u32)
     }
 
-    fn execute_sh(&mut self, base: u8, offset: Ixlen, src: u8) -> Result<(), Exception> {
+    fn execute_sh(&mut self, base: u8, offset: Ixlen, src: u8) -> InstrExecResult {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
         self.address_space
             .write_halfword(addr, self.regs[src as usize] as u16)
     }
 
-    fn execute_sb(&mut self, base: u8, offset: Ixlen, src: u8) -> Result<(), Exception> {
+    fn execute_sb(&mut self, base: u8, offset: Ixlen, src: u8) -> InstrExecResult {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
         self.address_space
             .write_byte(addr, self.regs[src as usize] as u8)
@@ -480,24 +497,27 @@ impl<'a> Hart<'a> {
     // Zicsr: Control Status Register support.
     // FIXME: asure atomicity of those instructions
     /// CSR Read & Write
-    fn execute_csrrw(&mut self, addr: u16, src: u8, dest: u8) -> Result<(), Exception> {
+    fn execute_csrrw(&mut self, addr: u16, src: u8, dest: u8) -> InstrExecResult {
         if dest == 0 {
             // Don't read the CSR if the value is discared
-            self.csr_space.write(addr, self.regs[dest as usize])?;
+            self.execution_env
+                .write_csr(addr, self.regs[dest as usize])?;
         } else {
-            let prev = self.csr_space.read(addr)?;
-            self.csr_space.write(addr, self.regs[src as usize])?;
+            let prev = self.execution_env.read_csr(addr)?;
+            self.execution_env
+                .write_csr(addr, self.regs[src as usize])?;
             self.regs[dest as usize] = prev;
         }
         Ok(())
     }
 
     /// CSR Read & Set
-    fn execute_csrrs(&mut self, addr: u16, src: u8, dest: u8) -> Result<(), Exception> {
-        let prev = self.csr_space.read(addr)?;
+    fn execute_csrrs(&mut self, addr: u16, src: u8, dest: u8) -> InstrExecResult {
+        let prev = self.execution_env.read_csr(addr)?;
         if src != 0 {
             // Don't write the CSR if nothing will change
-            self.csr_space.write(addr, prev | self.regs[src as usize])?;
+            self.execution_env
+                .write_csr(addr, prev | self.regs[src as usize])?;
         }
         if dest != 0 {
             self.regs[dest as usize] = prev;
@@ -506,12 +526,12 @@ impl<'a> Hart<'a> {
     }
 
     /// CSR Read & Clear
-    fn execute_csrrc(&mut self, addr: u16, src: u8, dest: u8) -> Result<(), Exception> {
-        let prev = self.csr_space.read(addr)?;
+    fn execute_csrrc(&mut self, addr: u16, src: u8, dest: u8) -> InstrExecResult {
+        let prev = self.execution_env.read_csr(addr)?;
         if src != 0 {
             // Don't write the CSR if nothing will change
-            self.csr_space
-                .write(addr, prev & !self.regs[src as usize])?;
+            self.execution_env
+                .write_csr(addr, prev & !self.regs[src as usize])?;
         }
         if dest != 0 {
             self.regs[dest as usize] = prev;
@@ -522,24 +542,26 @@ impl<'a> Hart<'a> {
     // The immediate Variants use the 5 bits that usually encode the source register.
     // This will be zero extended. The decode unit garantees `low_imm` is always < 32.
     /// CSR Read & Write immediate lower 5 bits
-    fn execute_csrrwi(&mut self, addr: u16, low_imm: u8, dest: u8) -> Result<(), Exception> {
+    fn execute_csrrwi(&mut self, addr: u16, low_imm: u8, dest: u8) -> InstrExecResult {
         if dest == 0 {
             // Don't read the CSR if the value is discared
-            self.csr_space.write(addr, self.regs[dest as usize])?;
+            self.execution_env
+                .write_csr(addr, self.regs[dest as usize])?;
         } else {
-            let prev = self.csr_space.read(addr)?;
-            self.csr_space.write(addr, low_imm as Uxlen)?;
+            let prev = self.execution_env.read_csr(addr)?;
+            self.execution_env.write_csr(addr, low_imm as Uxlen)?;
             self.regs[dest as usize] = prev;
         }
         Ok(())
     }
 
     /// CSR Read & Set immediate lower 5 bits
-    fn execute_csrrsi(&mut self, addr: u16, low_imm: u8, dest: u8) -> Result<(), Exception> {
-        let prev = self.csr_space.read(addr)?;
+    fn execute_csrrsi(&mut self, addr: u16, low_imm: u8, dest: u8) -> InstrExecResult {
+        let prev = self.execution_env.read_csr(addr)?;
         if low_imm != 0 {
             // Don't write the CSR if nothing will change
-            self.csr_space.write(addr, prev | (low_imm as Uxlen))?;
+            self.execution_env
+                .write_csr(addr, prev | (low_imm as Uxlen))?;
         }
         if dest != 0 {
             self.regs[dest as usize] = prev;
@@ -548,11 +570,12 @@ impl<'a> Hart<'a> {
     }
 
     /// CSR Read & Clear immediate lower 5 bits
-    fn execute_csrrci(&mut self, addr: u16, low_imm: u8, dest: u8) -> Result<(), Exception> {
-        let prev = self.csr_space.read(addr)?;
+    fn execute_csrrci(&mut self, addr: u16, low_imm: u8, dest: u8) -> InstrExecResult {
+        let prev = self.execution_env.read_csr(addr)?;
         if low_imm != 0 {
             // Don't write the CSR if nothing will change
-            self.csr_space.write(addr, prev & !(low_imm as Uxlen))?;
+            self.execution_env
+                .write_csr(addr, prev & !(low_imm as Uxlen))?;
         }
         if dest != 0 {
             self.regs[dest as usize] = prev;
