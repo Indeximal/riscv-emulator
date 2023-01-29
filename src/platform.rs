@@ -116,9 +116,51 @@ pub enum PriviledgeMode {
     Machine,
 }
 
+/// Table 3.2 in priviledged ISA
+///
+/// Z extensions are not present in this register.
+#[allow(dead_code)]
+mod isa_flags {
+    use crate::Uxlen;
+
+    pub const A: Uxlen = 1 << 0; // Atomic extension
+    pub const B: Uxlen = 1 << 1; // Tentatively reserved for Bit-Manipulation extension
+    pub const C: Uxlen = 1 << 2; // Compressed extension
+    pub const D: Uxlen = 1 << 3; // Double-precision floating-point extension
+    pub const E: Uxlen = 1 << 4; // RV32E base ISA
+    pub const F: Uxlen = 1 << 5; // Single-precision floating-point extension
+    pub const H: Uxlen = 1 << 7; // Hypervisor extension
+    pub const I: Uxlen = 1 << 8; // RV32I/64I/128I base ISA
+    pub const J: Uxlen = 1 << 9; // Tentatively reserved for Dynamically Translated Languages extension
+    pub const M: Uxlen = 1 << 12; // Integer Multiply/Divide extension
+    pub const N: Uxlen = 1 << 13; // Tentatively reserved for User-Level Interrupts extension
+    pub const P: Uxlen = 1 << 15; // Tentatively reserved for Packed-SIMD extension
+    pub const Q: Uxlen = 1 << 16; // Quad-precision floating-point extension
+    pub const S: Uxlen = 1 << 18; // Supervisor mode implemented
+    pub const U: Uxlen = 1 << 20; // User mode implemented
+    pub const V: Uxlen = 1 << 21; // Tentatively reserved for Vector extension
+    pub const X: Uxlen = 1 << 23; // Non-standard extensions present
+}
+
 pub struct Csr {
+    /// Hart Id. Zero in single core system. Keep low, but unique.
+    mhartid: Uxlen,
+    /// This WARL register is constant in this implementation. 0 if not implemented.
+    misa: Uxlen,
     /// In this simulation, the cycle, time and instret counter are all the same value.
     tick_count: u64,
+}
+
+impl Default for Csr {
+    /// The reset state
+    fn default() -> Self {
+        Self {
+            mhartid: 0,
+            // FIXME: dynamic 64 bit
+            misa: (1 << 30) | isa_flags::I,
+            tick_count: 0,
+        }
+    }
 }
 
 impl Csr {
@@ -136,6 +178,11 @@ impl Csr {
             0xC81 => Ok((self.tick_count >> 32) as Uxlen), // Time high
             0xC82 => Ok((self.tick_count >> 32) as Uxlen), // Instruction retired high
             // Other performance counter (0xC00..=0xC9F) are not implemented
+            0x301 => Ok(self.misa),     // Machine ISA
+            0xF11 => Ok(0),             // Vendor id. Zero since this is not commercial
+            0xF12 => Ok(0),             // Architecture id. Zero since this is not registered
+            0xF13 => Ok(0x13_09_B9_5C), // Implementation id. Randomly chosen
+            0xF14 => Ok(self.mhartid),  // Hart id
             _ => Err(Exception::IllegalInstruction(
                 IllegalInstrCause::CSRNotDefined,
             )),
@@ -149,6 +196,11 @@ impl Csr {
         match addr {
             // Performance Counters (read only)
             0xC00..=0xC9F => Err(Exception::IllegalInstruction(
+                IllegalInstrCause::CSRNotWritable,
+            )),
+            0x301 => Ok(()), // Ignore WARL Machine ISA Write
+            // Machine ids (read only)
+            0xF11..=0xF14 => Err(Exception::IllegalInstruction(
                 IllegalInstrCause::CSRNotWritable,
             )),
             _ => Err(Exception::IllegalInstruction(
