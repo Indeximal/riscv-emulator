@@ -125,7 +125,7 @@ impl<'a> Hart<'a> {
                 // FIXME: Warning on illegal funct7
                 match instr.funct3 {
                     0b000 => {
-                        if instr.funct7 == 0b010_000 {
+                        if instr.funct7 == 0b010_0000 {
                             self.execute_sub(instr.rs1, instr.rs2, instr.rd);
                         } else {
                             self.execute_add(instr.rs1, instr.rs2, instr.rd);
@@ -138,7 +138,7 @@ impl<'a> Hart<'a> {
                     0b111 => self.execute_and(instr.rs1, instr.rs2, instr.rd),
                     0b001 => self.execute_sll(instr.rs1, instr.rs2, instr.rd),
                     0b101 => {
-                        if instr.funct7 == 0b010_000 {
+                        if instr.funct7 == 0b010_0000 {
                             self.execute_sra(instr.rs1, instr.rs2, instr.rd);
                         } else {
                             self.execute_srl(instr.rs1, instr.rs2, instr.rd);
@@ -480,17 +480,17 @@ impl<'a> Hart<'a> {
     }
     fn execute_lhu(&mut self, base: u8, offset: Ixlen, dest: u8) -> InstrExecResult {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
-        self.regs[dest as usize] = self.address_space.read_word(addr)?;
+        self.regs[dest as usize] = self.address_space.read_halfword(addr)? as Uxlen;
         Ok(())
     }
     fn execute_lb(&mut self, base: u8, offset: Ixlen, dest: u8) -> InstrExecResult {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
-        self.regs[dest as usize] = self.address_space.read_word(addr)? as i8 as Ixlen as Uxlen;
+        self.regs[dest as usize] = self.address_space.read_byte(addr)? as i8 as Ixlen as Uxlen;
         Ok(())
     }
     fn execute_lbu(&mut self, base: u8, offset: Ixlen, dest: u8) -> InstrExecResult {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
-        self.regs[dest as usize] = self.address_space.read_word(addr)?;
+        self.regs[dest as usize] = self.address_space.read_byte(addr)? as Uxlen;
         Ok(())
     }
 
