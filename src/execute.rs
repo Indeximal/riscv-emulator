@@ -4,8 +4,8 @@ use crate::platform::{AddressSpace, PlatformState, PriviledgeMode};
 use crate::{Ixlen, Uxlen};
 
 /// Hardware Thread
-pub struct Hart<'a> {
-    pub address_space: AddressSpace<'a>,
+pub struct Hart<A: AddressSpace> {
+    pub address_space: A,
     pub execution_env: PlatformState,
 
     /// The program counter. I.e. the address (aligned) to the next
@@ -21,7 +21,7 @@ pub struct Hart<'a> {
 
 type InstrExecResult = Result<(), SynchronousCause>;
 
-impl<'a> Hart<'a> {
+impl<A: AddressSpace> Hart<A> {
     /// Advances the hart until a breakpoint or until `max_instr` dynamic instruction
     /// have been executed.
     pub fn run(&mut self, max_instr: usize) {

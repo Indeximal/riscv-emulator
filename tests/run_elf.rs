@@ -5,12 +5,120 @@
 //! rv32ui-p-*
 //!
 
-use object::{Object, ObjectSection};
 use riscv_emulator::execute::Hart;
+use riscv_emulator::platform::exception::SynchronousCause;
 use riscv_emulator::platform::{AddressSpace, PlatformState};
+use riscv_emulator::Uxlen;
+
+use object::{Object, ObjectSection};
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
+
+struct ElfTestAddressSpace {
+    /// Maps to 0x8000_0000 - 0x8000_2fff, 16 KiB memory
+    main_memory: Box<[u8; 0x4000]>,
+}
+
+impl ElfTestAddressSpace {
+    const MEM_MASK: Uxlen = 0xffff_c000;
+    const MEM_PATTERN: Uxlen = 0x8000_0000;
+
+    fn address<const WIDTH: usize>(&self, addr: Uxlen) -> Result<usize, ()> {
+        let end_addr = addr + WIDTH as Uxlen - 1;
+        if addr & Self::MEM_MASK == Self::MEM_PATTERN
+            && end_addr & Self::MEM_MASK == Self::MEM_PATTERN
+        {
+            Ok((addr & !Self::MEM_MASK) as usize)
+        } else {
+            Err(())
+        }
+    }
+
+    /// Create a new address space with the main memory on the heap.
+    fn new() -> Self {
+        // Cannot use `Box::new([0u8; 0x4000])` as this creates the data on the stack first.
+        let mem = vec![0u8; 0x4000].into_boxed_slice();
+        ElfTestAddressSpace {
+            // FIXME: compile time garantee?
+            main_memory: mem.try_into().expect("Wrong memory size"),
+        }
+    }
+}
+
+impl AddressSpace for ElfTestAddressSpace {
+    fn read_word(&self, addr: Uxlen) -> Result<u32, SynchronousCause> {
+        let lsb_index = self
+            .address::<4>(addr)
+            .map_err(|_| SynchronousCause::LoadAccessFault)?;
+        Ok(u32::from_le_bytes(
+            self.main_memory[lsb_index..lsb_index + 4]
+                .try_into()
+                .unwrap(),
+        ))
+    }
+
+    fn read_halfword(&self, addr: Uxlen) -> Result<u16, SynchronousCause> {
+        let lsb_index = self
+            .address::<2>(addr)
+            .map_err(|_| SynchronousCause::LoadAccessFault)?;
+        Ok(u16::from_le_bytes(
+            self.main_memory[lsb_index..lsb_index + 2]
+                .try_into()
+                .unwrap(),
+        ))
+    }
+
+    fn read_byte(&self, addr: Uxlen) -> Result<u8, SynchronousCause> {
+        let lsb_index = self
+            .address::<1>(addr)
+            .map_err(|_| SynchronousCause::LoadAccessFault)?;
+        Ok(self.main_memory[lsb_index])
+    }
+
+    fn write_word(&mut self, addr: Uxlen, val: u32) -> Result<(), SynchronousCause> {
+        let lsb_index = self
+            .address::<4>(addr)
+            .map_err(|_| SynchronousCause::StoreAMOAccessFault)?;
+        self.main_memory[lsb_index..lsb_index + 4].copy_from_slice(&val.to_le_bytes());
+
+        Ok(())
+    }
+
+    fn write_halfword(&mut self, addr: Uxlen, val: u16) -> Result<(), SynchronousCause> {
+        let lsb_index = self
+            .address::<2>(addr)
+            .map_err(|_| SynchronousCause::StoreAMOAccessFault)?;
+        self.main_memory[lsb_index..lsb_index + 2].copy_from_slice(&val.to_le_bytes());
+
+        Ok(())
+    }
+
+    fn write_byte(&mut self, addr: Uxlen, val: u8) -> Result<(), SynchronousCause> {
+        let lsb_index = self
+            .address::<1>(addr)
+            .map_err(|_| SynchronousCause::StoreAMOAccessFault)?;
+        self.main_memory[lsb_index] = val;
+
+        Ok(())
+    }
+}
+
+#[test]
+fn mem_test() {
+    let mut address_space = ElfTestAddressSpace::new();
+
+    address_space
+        .write_word(0x8000_0000, 0x12_34_56_78)
+        .expect("Write bound check failed");
+    assert_eq!(address_space.main_memory[0..4], [0x78, 0x56, 0x34, 0x12]);
+    assert_eq!(
+        address_space
+            .read_word(0x8000_0000)
+            .expect("Read bounds check failed"),
+        0x12_34_56_78
+    );
+}
 
 fn parse_text_init<'a>(bin_data: &'a Vec<u8>) -> &'a [u8] {
     let obj_file = object::File::parse(bin_data.as_slice()).expect("parsing failed");
@@ -44,18 +152,16 @@ fn parsing() -> Result<(), Box<dyn Error>> {
 }
 
 fn run_unittest_binary(name: &str, num_step_batches: usize) {
-    let mut mem = vec![0u8; 0x100_0000];
-    let address_space = AddressSpace {
-        main_memory: mem.as_mut_slice().try_into().expect("Wrong memory size"),
-    };
+    let mut address_space = ElfTestAddressSpace::new();
 
     let mut binary_path = PathBuf::from("./tests/binaries/");
     binary_path.push(name);
     let binary = fs::read(binary_path).expect("File read failed");
     let text_ref = parse_text_init(&binary);
     let data_ref = parse_data(&binary);
-    // Copy to start of main memory
+    // Copy .text to start of main memory
     address_space.main_memory[..text_ref.len()].copy_from_slice(text_ref);
+    // Copy .data at an offset
     if let Some(data_ref) = data_ref {
         address_space.main_memory[0x2000..data_ref.len() + 0x2000].copy_from_slice(data_ref);
     }
@@ -63,7 +169,7 @@ fn run_unittest_binary(name: &str, num_step_batches: usize) {
     let mut hart = Hart {
         address_space,
         execution_env: PlatformState::default(),
-        reg_pc: 0x100_0000,
+        reg_pc: 0x8000_0000,
         regs: [0; 32],
     };
 
