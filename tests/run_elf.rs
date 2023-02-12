@@ -18,6 +18,8 @@ use std::path::PathBuf;
 struct ElfTestAddressSpace {
     /// Maps to 0x8000_0000 - 0x8000_2fff, 16 KiB memory
     main_memory: Box<[u8; 0x4000]>,
+
+    tohost: u32,
 }
 
 impl ElfTestAddressSpace {
@@ -42,6 +44,7 @@ impl ElfTestAddressSpace {
         ElfTestAddressSpace {
             // FIXME: compile time garantee?
             main_memory: mem.try_into().expect("Wrong memory size"),
+            tohost: 0,
         }
     }
 }
@@ -77,6 +80,11 @@ impl AddressSpace for ElfTestAddressSpace {
     }
 
     fn write_word(&mut self, addr: Uxlen, val: u32) -> Result<(), SynchronousCause> {
+        if addr == 0x8000_1000 {
+            self.tohost = val;
+            return Err(SynchronousCause::Breakpoint);
+        }
+
         let lsb_index = self
             .address::<4>(addr)
             .map_err(|_| SynchronousCause::StoreAMOAccessFault)?;
@@ -151,7 +159,7 @@ fn parsing() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn run_unittest_binary(name: &str, num_step_batches: usize) {
+fn run_unittest_binary(name: &str) {
     let mut address_space = ElfTestAddressSpace::new();
 
     let mut binary_path = PathBuf::from("./tests/binaries/");
@@ -173,172 +181,170 @@ fn run_unittest_binary(name: &str, num_step_batches: usize) {
         regs: [0; 32],
     };
 
-    // Watchdog
-    for _ in 0..num_step_batches {
-        hart.run(100);
-        // Lowest byte of `tohost`
-        if hart.address_space.main_memory[0x1000] != 0 {
-            assert_eq!(hart.address_space.main_memory[0x1000], 1);
-            return;
-        }
+    use riscv_emulator::execute::StopReason::*;
+    match hart.run(10000) {
+        MaxInstrReached => panic!("The hart didn't write to host before the step limit!"),
+        BreakpointHit => assert_eq!(
+            hart.address_space.tohost, 1,
+            "tohost wrote an non success value"
+        ),
+        UnrecoverableError => unreachable!("Not implemented in the simulator"),
     }
-
-    panic!("The hart didn't write to host before the step limit!")
 }
 
 #[test]
 fn test_rv32ui_p_add() {
-    run_unittest_binary("rv32ui-p-add", 100);
+    run_unittest_binary("rv32ui-p-add");
 }
 #[test]
 fn test_rv32ui_p_addi() {
-    run_unittest_binary("rv32ui-p-addi", 100);
+    run_unittest_binary("rv32ui-p-addi");
 }
 #[test]
 fn test_rv32ui_p_and() {
-    run_unittest_binary("rv32ui-p-and", 100);
+    run_unittest_binary("rv32ui-p-and");
 }
 #[test]
 fn test_rv32ui_p_andi() {
-    run_unittest_binary("rv32ui-p-andi", 100);
+    run_unittest_binary("rv32ui-p-andi");
 }
 #[test]
 fn test_rv32ui_p_auipc() {
-    run_unittest_binary("rv32ui-p-auipc", 100);
+    run_unittest_binary("rv32ui-p-auipc");
 }
 #[test]
 fn test_rv32ui_p_beq() {
-    run_unittest_binary("rv32ui-p-beq", 100);
+    run_unittest_binary("rv32ui-p-beq");
 }
 #[test]
 fn test_rv32ui_p_bge() {
-    run_unittest_binary("rv32ui-p-bge", 100);
+    run_unittest_binary("rv32ui-p-bge");
 }
 #[test]
 fn test_rv32ui_p_bgeu() {
-    run_unittest_binary("rv32ui-p-bgeu", 100);
+    run_unittest_binary("rv32ui-p-bgeu");
 }
 #[test]
 fn test_rv32ui_p_blt() {
-    run_unittest_binary("rv32ui-p-blt", 100);
+    run_unittest_binary("rv32ui-p-blt");
 }
 #[test]
 fn test_rv32ui_p_bltu() {
-    run_unittest_binary("rv32ui-p-bltu", 100);
+    run_unittest_binary("rv32ui-p-bltu");
 }
 #[test]
 fn test_rv32ui_p_bne() {
-    run_unittest_binary("rv32ui-p-bne", 100);
+    run_unittest_binary("rv32ui-p-bne");
 }
 #[test]
 fn test_rv32ui_p_fence_i() {
-    run_unittest_binary("rv32ui-p-fence_i", 100);
+    run_unittest_binary("rv32ui-p-fence_i");
 }
 #[test]
 fn test_rv32ui_p_jal() {
-    run_unittest_binary("rv32ui-p-jal", 100);
+    run_unittest_binary("rv32ui-p-jal");
 }
 #[test]
 fn test_rv32ui_p_jalr() {
-    run_unittest_binary("rv32ui-p-jalr", 100);
+    run_unittest_binary("rv32ui-p-jalr");
 }
 #[test]
 fn test_rv32ui_p_lb() {
-    run_unittest_binary("rv32ui-p-lb", 100);
+    run_unittest_binary("rv32ui-p-lb");
 }
 #[test]
 fn test_rv32ui_p_lbu() {
-    run_unittest_binary("rv32ui-p-lbu", 100);
+    run_unittest_binary("rv32ui-p-lbu");
 }
 #[test]
 fn test_rv32ui_p_lh() {
-    run_unittest_binary("rv32ui-p-lh", 100);
+    run_unittest_binary("rv32ui-p-lh");
 }
 #[test]
 fn test_rv32ui_p_lhu() {
-    run_unittest_binary("rv32ui-p-lhu", 100);
+    run_unittest_binary("rv32ui-p-lhu");
 }
 #[test]
 fn test_rv32ui_p_lui() {
-    run_unittest_binary("rv32ui-p-lui", 100);
+    run_unittest_binary("rv32ui-p-lui");
 }
 #[test]
 fn test_rv32ui_p_lw() {
-    run_unittest_binary("rv32ui-p-lw", 100);
+    run_unittest_binary("rv32ui-p-lw");
 }
 #[test]
 fn test_rv32ui_p_or() {
-    run_unittest_binary("rv32ui-p-or", 100);
+    run_unittest_binary("rv32ui-p-or");
 }
 #[test]
 fn test_rv32ui_p_ori() {
-    run_unittest_binary("rv32ui-p-ori", 100);
+    run_unittest_binary("rv32ui-p-ori");
 }
 #[test]
 fn test_rv32ui_p_sb() {
-    run_unittest_binary("rv32ui-p-sb", 100);
+    run_unittest_binary("rv32ui-p-sb");
 }
 #[test]
 fn test_rv32ui_p_sh() {
-    run_unittest_binary("rv32ui-p-sh", 100);
+    run_unittest_binary("rv32ui-p-sh");
 }
 #[test]
 fn test_rv32ui_p_simple() {
-    run_unittest_binary("rv32ui-p-simple", 100);
+    run_unittest_binary("rv32ui-p-simple");
 }
 #[test]
 fn test_rv32ui_p_sll() {
-    run_unittest_binary("rv32ui-p-sll", 100);
+    run_unittest_binary("rv32ui-p-sll");
 }
 #[test]
 fn test_rv32ui_p_slli() {
-    run_unittest_binary("rv32ui-p-slli", 100);
+    run_unittest_binary("rv32ui-p-slli");
 }
 #[test]
 fn test_rv32ui_p_slt() {
-    run_unittest_binary("rv32ui-p-slt", 100);
+    run_unittest_binary("rv32ui-p-slt");
 }
 #[test]
 fn test_rv32ui_p_slti() {
-    run_unittest_binary("rv32ui-p-slti", 100);
+    run_unittest_binary("rv32ui-p-slti");
 }
 #[test]
 fn test_rv32ui_p_sltiu() {
-    run_unittest_binary("rv32ui-p-sltiu", 100);
+    run_unittest_binary("rv32ui-p-sltiu");
 }
 #[test]
 fn test_rv32ui_p_sltu() {
-    run_unittest_binary("rv32ui-p-sltu", 100);
+    run_unittest_binary("rv32ui-p-sltu");
 }
 #[test]
 fn test_rv32ui_p_sra() {
-    run_unittest_binary("rv32ui-p-sra", 100);
+    run_unittest_binary("rv32ui-p-sra");
 }
 #[test]
 fn test_rv32ui_p_srai() {
-    run_unittest_binary("rv32ui-p-srai", 100);
+    run_unittest_binary("rv32ui-p-srai");
 }
 #[test]
 fn test_rv32ui_p_srl() {
-    run_unittest_binary("rv32ui-p-srl", 100);
+    run_unittest_binary("rv32ui-p-srl");
 }
 #[test]
 fn test_rv32ui_p_srli() {
-    run_unittest_binary("rv32ui-p-srli", 100);
+    run_unittest_binary("rv32ui-p-srli");
 }
 #[test]
 fn test_rv32ui_p_sub() {
-    run_unittest_binary("rv32ui-p-sub", 100);
+    run_unittest_binary("rv32ui-p-sub");
 }
 #[test]
 fn test_rv32ui_p_sw() {
-    run_unittest_binary("rv32ui-p-sw", 100);
+    run_unittest_binary("rv32ui-p-sw");
 }
 #[test]
 fn test_rv32ui_p_xor() {
-    run_unittest_binary("rv32ui-p-xor", 100);
+    run_unittest_binary("rv32ui-p-xor");
 }
 #[test]
 fn test_rv32ui_p_xori() {
-    run_unittest_binary("rv32ui-p-xori", 100);
+    run_unittest_binary("rv32ui-p-xori");
 }

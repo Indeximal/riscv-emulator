@@ -19,12 +19,23 @@ pub struct Hart<A: AddressSpace> {
     pub regs: [Uxlen; 32],
 }
 
+/// The reason a simulation run stoped/paused.
+pub enum StopReason {
+    /// Stopped after the specified number of instructions. Safe to continue.
+    MaxInstrReached,
+    /// Stopped after hitting a breakpoint. Safe to continue if a breakpoint
+    /// handler has been set up.
+    BreakpointHit,
+    /// Not safe to continue. (Currently never the case)
+    UnrecoverableError,
+}
+
 type InstrExecResult = Result<(), SynchronousCause>;
 
 impl<A: AddressSpace> Hart<A> {
     /// Advances the hart until a breakpoint or until `max_instr` dynamic instruction
     /// have been executed.
-    pub fn run(&mut self, max_instr: usize) {
+    pub fn run(&mut self, max_instr: usize) -> StopReason {
         for _ in 0..max_instr {
             match self.step_instruction() {
                 Err(SynchronousCause::MachineReturn) => {
@@ -38,7 +49,7 @@ impl<A: AddressSpace> Hart<A> {
                         TrapCause::Exception(SynchronousCause::Breakpoint),
                     );
                     // Stop the current run, after switching into the trap.
-                    return;
+                    return StopReason::BreakpointHit;
                 }
                 Err(except) => {
                     log::info!("Encountered exception {:?}", except);
@@ -49,6 +60,7 @@ impl<A: AddressSpace> Hart<A> {
                 _ => self.execution_env.increment_tick(),
             };
         }
+        StopReason::MaxInstrReached
     }
 
     /// Fetches, decodes, executes one instruction and increments the PC.

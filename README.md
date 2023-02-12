@@ -12,7 +12,6 @@ Goal is virtual memory (maybe Phyical Memory Protection PMP)
 * TODO: Reset and NonMaskableInterrupt Vector location
 
 # TODO
-* Generic Address Space / Memory mapped test output (?)
 * Use Wrapping as the integer type (?)
 * Fix trap return to use `mstatus`
 * 64bit
