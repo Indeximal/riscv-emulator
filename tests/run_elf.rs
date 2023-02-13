@@ -193,6 +193,12 @@ fn run_unittest_binary(name: &str) {
 }
 
 #[test]
+#[ignore = "fails since mcounteren is not implemented"]
+fn test_rv32mi_p_csr() {
+    run_unittest_binary("rv32mi-p-csr");
+}
+
+#[test]
 fn test_rv32ui_p_add() {
     run_unittest_binary("rv32ui-p-add");
 }

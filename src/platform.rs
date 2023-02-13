@@ -152,11 +152,11 @@ pub trait AddressSpace {
 #[derive(Debug, Clone, Copy)]
 pub enum PriviledgeMode {
     /// Level 3: 11: Machine (M)
-    Machine,
+    Machine = 3,
     /// Level 1: 01: Supervisor (S)
     //Supervisor,
     /// Level 0: 00: User (U)
-    User,
+    User = 0,
 }
 
 pub struct PlatformState {
@@ -179,6 +179,51 @@ pub struct PlatformState {
     csr_mtvec: exception::TrapVector,
     /// Cause of the latest trap into machine mode.
     csr_mcause: TrapCause,
+    /// Status registers. Mostly unimplemented, but contains trap stack.
+    csr_mstatus: MStatusReg,
+    /// Additional Machine mode register.
+    csr_mscratch: Uxlen,
+}
+
+/// This struct encodes the `mstatus` register.
+/// It is incomplete.
+pub struct MStatusReg {
+    /// Machine global interrupt enable bit. Same level interrupts are enabled when true
+    /// and this is encoded as the bit set to 1.
+    /// Higher level interrupts are always enabled and lower interrupts always disabled.
+    /// bit 3.
+    mie: bool,
+
+    /// Previous machine interrupt enable bit. bit 7.
+    mpie: bool,
+
+    /// Previous priviledge mode. bits 11 & 12.
+    mpp: PriviledgeMode,
+    // TODO: UXL! (3.1.6.2)
+
+    // TODO: all the memory protection stuff, but can be read only zero
+    // e.g MPRV: Modify priviledge (use `mpp` as effective memory priviledge)
+
+    // Endianness is always little endian. thus encoded as zero.
+
+    // No float, vector or additional state so FS, VS, XS and SD are read only zero.
+}
+
+impl MStatusReg {
+    fn encode(&self) -> Uxlen {
+        ((self.mie as Uxlen) << 3) | ((self.mpie as Uxlen) << 7) | ((self.mpp as Uxlen) << 11)
+    }
+
+    fn update(&mut self, val: Uxlen) {
+        // FIXME: is ignoring invalid bit writes fine?
+        self.mie = val & (1 << 3) != 0;
+        self.mpie = val & (1 << 7) != 0;
+        self.mpp = match (val >> 11) & 0b11 {
+            0b11 => PriviledgeMode::Machine,
+            0b00 => PriviledgeMode::User,
+            _ => PriviledgeMode::User,
+        }
+    }
 }
 
 impl Default for PlatformState {
@@ -186,7 +231,7 @@ impl Default for PlatformState {
     fn default() -> Self {
         Self {
             csr_mhartid: 0,
-            // FIXME: dynamic 64 bit
+            /// Defines MXLEN and implemented extensions. FIXME: dynamic 64 bit
             csr_misa: (1 << 30) | crate::isa_flags::I | crate::isa_flags::U,
             tick_count: 0,
             // Unspecified after reset
@@ -195,6 +240,12 @@ impl Default for PlatformState {
             // Unspecified after reset
             csr_mtvec: exception::TrapVector::Direct(0),
             csr_mcause: TrapCause::Exception(SynchronousCause::Reset),
+            csr_mstatus: MStatusReg {
+                mie: true,
+                mpie: true,
+                mpp: PriviledgeMode::User,
+            },
+            csr_mscratch: 0,
         }
     }
 }
@@ -208,17 +259,31 @@ impl PlatformState {
         use PriviledgeMode::*;
 
         match (self.priviledge, addr) {
-            // Performance counter (0xC00..=0xC9F). Only basic ones implemented
-            (_, 0xC00) => Ok(self.tick_count as Uxlen), // Cycle
-            (_, 0xC01) => Ok(self.tick_count as Uxlen), // Time
-            (_, 0xC02) => Ok(self.tick_count as Uxlen), // Instruction retired
-            (_, 0xC80) => Ok((self.tick_count >> 32) as Uxlen), // Cycle high
-            (_, 0xC81) => Ok((self.tick_count >> 32) as Uxlen), // Time high
-            (_, 0xC82) => Ok((self.tick_count >> 32) as Uxlen), // Instruction retired high
+            // Performance counter (0xC00..=0xC9F for user, 0xB00..=0xB9F for machine).
+            // FIXME: fix permissions with `mcounteren` csr
+            // (_, 0xC00) => Ok(self.tick_count as Uxlen), // Cycle
+            // (_, 0xC01) => Ok(self.tick_count as Uxlen), // Time
+            // (_, 0xC02) => Ok(self.tick_count as Uxlen), // Instruction retired
+            // (_, 0xC80) => Ok((self.tick_count >> 32) as Uxlen), // Cycle high
+            // (_, 0xC81) => Ok((self.tick_count >> 32) as Uxlen), // Time high
+            // (_, 0xC82) => Ok((self.tick_count >> 32) as Uxlen), // Instruction retired high
+            // (_, 0xC00..=0xC9F) => Ok(0),                // Other counters
+            (Machine, 0xB00) => Ok(self.tick_count as Uxlen), // Cycle
+            (Machine, 0xB02) => Ok(self.tick_count as Uxlen), // Instruction retired
+            (Machine, 0xB80) => Ok((self.tick_count >> 32) as Uxlen), // Cycle high
+            (Machine, 0xB81) => Ok((self.tick_count >> 32) as Uxlen), // Time high
+            (Machine, 0xB82) => Ok((self.tick_count >> 32) as Uxlen), // Instruction retired high
+            (Machine, 0xB00..=0xB9F) => Ok(0),                // Other counters
+            (Machine, 0x323..=0x33F) => Ok(0),                // Event selectors
+            (Machine, 0x306) => Ok(0),                        // Counter enable (make available)
+            (Machine, 0x320) => Ok(0),                        // Counter inhibit
             // Trap handling
-            (Machine, 0x305) => Ok(self.csr_mtvec.into()), // Machine trap vector
+            (Machine, 0x300) => Ok(self.csr_mstatus.encode()), // Machine status register
+            (Machine, 0x310) => Ok(0),                         // Machine status register upper
+            (Machine, 0x305) => Ok(self.csr_mtvec.into()),     // Machine trap vector
             (Machine, 0x341) => Ok(self.csr_mepc & !0b11), // Machine exception return address (aligned)
             (Machine, 0x342) => Ok(self.csr_mcause.into()), // Machine trap cause
+            (Machine, 0x340) => Ok(self.csr_mscratch),     // Machine scratch
             // TODO: Interrupt handling (disabled for now)
             (Machine, 0x304) => Ok(0), // Machine interrupt pending
             (Machine, 0x344) => Ok(0), // Machine interrupt enable
@@ -234,13 +299,14 @@ impl PlatformState {
     }
 
     /// The lower 12 bits of `addr` encode the CSR specifier.
-    /// TODO: use Read-Modify-Write?
     pub fn write_csr(&mut self, addr: u16, value: Uxlen) -> Result<(), SynchronousCause> {
         use PriviledgeMode::*;
 
         match (self.priviledge, addr) {
-            // Performance Counters (read only)
+            // Performance Counters (read only, user & machine & setup)
             (_, 0xC00..=0xC9F) => Err(SynchronousCause::IllegalInstruction),
+            (_, 0xB00..=0xB9F) => Err(SynchronousCause::IllegalInstruction),
+            (_, 0x323..=0x33F) => Err(SynchronousCause::IllegalInstruction),
             // Trap handling
             (Machine, 0x305) => {
                 // Set machine trap vector address, ignore unsupported modes
@@ -260,8 +326,18 @@ impl PlatformState {
                 self.csr_mepc = value.into();
                 Ok(())
             }
+            (Machine, 0x300) => {
+                // Machine status register
+                self.csr_mstatus.update(value);
+                Ok(())
+            }
+
+            (Machine, 0x340) => {
+                // Machine scratch
+                self.csr_mscratch = value;
+                Ok(())
+            }
             // TODO: Interrupt handling, ignored for now
-            (Machine, 0x300) => Ok(()), // Machine status register
             (Machine, 0x304) => Ok(()), // Machine interrupt pending
             (Machine, 0x344) => Ok(()), // Machine interrupt enable
             // Static platform information (read only in this implementation)
@@ -280,6 +356,12 @@ impl PlatformState {
         self.csr_mcause = cause;
         self.csr_mepc = addr;
 
+        let previous_priv = self.priviledge;
+
+        // Always trap into machine mode for now
+        self.csr_mstatus.mpie = self.csr_mstatus.mie;
+        self.csr_mstatus.mie = false;
+        self.csr_mstatus.mpp = previous_priv;
         self.priviledge = PriviledgeMode::Machine;
 
         match self.csr_mtvec {
@@ -294,16 +376,18 @@ impl PlatformState {
     /// Returns from a (machine) trap.
     /// TODO: SRET
     ///
-    /// TODO: push & pop mstatus fields.
-    /// quote: An MRET or SRET instruction is used to return from a trap in M-mode or S-mode respectively.
-    /// When executing an x RET instruction, supposing x PP holds the value y, x IE is set to x PIE; the
-    /// privilege mode is changed to y; x PIE is set to 1; and x PP is set to the least-privileged supported
-    /// mode (U if U-mode is implemented, else M). If x PP̸=M, x RET also sets MPRV=0
-    ///
     /// Returns the intruction address prior to the trap handler, continue executing there.
+    ///
+    /// *"An MRET or SRET instruction is used to return from a trap in M-mode or S-mode respectively.
+    /// When executing an xRET instruction, supposing xPP holds the value y, xIE is set to xPIE; the
+    /// privilege mode is changed to y; xPIE is set to 1; and xPP is set to the least-privileged supported
+    /// mode (U if U-mode is implemented, else M). If xPP!=M, xRET also sets MPRV=0"*
     pub fn trap_return(&mut self) -> Uxlen {
-        // FIXME: This is in general not the case.
-        self.priviledge = PriviledgeMode::User;
+        self.csr_mstatus.mie = self.csr_mstatus.mpie;
+        self.priviledge = self.csr_mstatus.mpp;
+        self.csr_mstatus.mpie = true;
+        self.csr_mstatus.mpp = PriviledgeMode::User;
+        // FIXME: ? MPRV = 0 if mpp wasn't Machine
 
         self.csr_mepc
     }

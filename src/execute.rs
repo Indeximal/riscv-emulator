@@ -529,7 +529,7 @@ impl<A: AddressSpace> Hart<A> {
     /// CSR Read & Write
     fn execute_csrrw(&mut self, addr: u16, src: u8, dest: u8) -> InstrExecResult {
         if dest == 0 {
-            // Don't read the CSR if the value is discared
+            // Don't read the CSR if the value is discarded
             self.execution_env
                 .write_csr(addr, self.regs[src as usize])?;
         } else {

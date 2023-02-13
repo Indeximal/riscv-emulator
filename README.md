@@ -5,7 +5,7 @@ https://riscv.org/technical/specifications/
 * ISA: RV32I_Zicsr_Zifencei (currently), Goal is RV64IMAC_Zicsr_Zifencei
 * Priviledge modes: Machine mode and user mode (currently), Goal is 3 level: M, S, U.
 Maybe add Debug mode aswell
-* Address space: phyiscal 16MiB main memory at 0x100_0000 (currently)
+* Address space: generic.
 Goal is virtual memory (maybe Phyical Memory Protection PMP)
 * Num Harts: 1 currently, maybe multiple at some point
 * Memory Model: Will always be sequentially consitent (Thus Ztso in particular)
@@ -13,11 +13,10 @@ Goal is virtual memory (maybe Phyical Memory Protection PMP)
 
 # TODO
 * Use Wrapping as the integer type (?)
-* Fix trap return to use `mstatus`
 * 64bit
 * M
 * A
-* Timer Interrupt
+* Timer Interrupt, proper csr, mstatus: TW & WFI, ...
 * C
 
 # Goal
