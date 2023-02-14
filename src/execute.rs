@@ -39,11 +39,12 @@ impl<A: AddressSpace> Hart<A> {
         for _ in 0..max_instr {
             match self.step_instruction() {
                 Err(SynchronousCause::MachineReturn) => {
+                    log::info!("Returning from trap");
                     // This is not a trap!
                     self.reg_pc = self.execution_env.trap_return();
                 }
                 Err(SynchronousCause::Breakpoint) => {
-                    log::info!("Breaking");
+                    log::info!("Breakpoint hit, PC=0x{:x}", self.reg_pc);
                     self.reg_pc = self.execution_env.trap(
                         self.reg_pc,
                         TrapCause::Exception(SynchronousCause::Breakpoint),
@@ -52,7 +53,7 @@ impl<A: AddressSpace> Hart<A> {
                     return StopReason::BreakpointHit;
                 }
                 Err(except) => {
-                    log::info!("Encountered exception {:?}", except);
+                    log::info!("Encountered exception {:?}, PC=0x{:x}", except, self.reg_pc);
                     self.reg_pc = self
                         .execution_env
                         .trap(self.reg_pc, TrapCause::Exception(except));
@@ -94,13 +95,20 @@ impl<A: AddressSpace> Hart<A> {
                     0b100 => self.execute_xori(instr.rs1, instr.imm as Uxlen, instr.rd),
                     0b110 => self.execute_ori(instr.rs1, instr.imm as Uxlen, instr.rd),
                     0b111 => self.execute_andi(instr.rs1, instr.imm as Uxlen, instr.rd),
-                    0b001 => self.execute_slli(instr.rs1, instr.imm as Uxlen, instr.rd),
+                    0b001 => {
+                        // FIXME: 64 bit
+                        if instr.imm & 0b1111_1110_0000 != 0 {
+                            return Err(SynchronousCause::IllegalInstruction);
+                        }
+                        self.execute_slli(instr.rs1, instr.imm as Uxlen, instr.rd)
+                    }
                     0b101 => {
-                        // FIXME: Warning on illegal funct7
-                        if instr.imm & 0b0100_0000_0000 == 0 {
+                        if instr.imm & 0b1111_1110_0000 == 0 {
                             self.execute_srli(instr.rs1, instr.imm as Uxlen, instr.rd)
-                        } else {
+                        } else if instr.imm & 0b1111_1110_0000 == 0b0100_0000_0000 {
                             self.execute_srai(instr.rs1, instr.imm as Uxlen, instr.rd)
+                        } else {
+                            return Err(SynchronousCause::IllegalInstruction);
                         }
                     }
                     _ => unreachable!("funct3 should only be 3 bits"),
@@ -134,29 +142,18 @@ impl<A: AddressSpace> Hart<A> {
                     self.reg_pc += 4;
                     break 'instr_exec;
                 }
-                // FIXME: Warning on illegal funct7
-                match instr.funct3 {
-                    0b000 => {
-                        if instr.funct7 == 0b010_0000 {
-                            self.execute_sub(instr.rs1, instr.rs2, instr.rd);
-                        } else {
-                            self.execute_add(instr.rs1, instr.rs2, instr.rd);
-                        }
-                    }
-                    0b010 => self.execute_slt(instr.rs1, instr.rs2, instr.rd),
-                    0b011 => self.execute_sltu(instr.rs1, instr.rs2, instr.rd),
-                    0b100 => self.execute_xor(instr.rs1, instr.rs2, instr.rd),
-                    0b110 => self.execute_or(instr.rs1, instr.rs2, instr.rd),
-                    0b111 => self.execute_and(instr.rs1, instr.rs2, instr.rd),
-                    0b001 => self.execute_sll(instr.rs1, instr.rs2, instr.rd),
-                    0b101 => {
-                        if instr.funct7 == 0b010_0000 {
-                            self.execute_sra(instr.rs1, instr.rs2, instr.rd);
-                        } else {
-                            self.execute_srl(instr.rs1, instr.rs2, instr.rd);
-                        }
-                    }
-                    _ => unreachable!("funct3 should only be 3 bits"),
+                match (instr.funct7, instr.funct3) {
+                    (0b010_0000, 0b000) => self.execute_sub(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0000, 0b000) => self.execute_add(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0000, 0b010) => self.execute_slt(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0000, 0b011) => self.execute_sltu(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0000, 0b100) => self.execute_xor(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0000, 0b110) => self.execute_or(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0000, 0b111) => self.execute_and(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0000, 0b001) => self.execute_sll(instr.rs1, instr.rs2, instr.rd),
+                    (0b010_0000, 0b101) => self.execute_sra(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0000, 0b101) => self.execute_srl(instr.rs1, instr.rs2, instr.rd),
+                    _ => return Err(SynchronousCause::IllegalInstruction),
                 }
                 self.reg_pc += 4;
             }
@@ -268,21 +265,21 @@ impl<A: AddressSpace> Hart<A> {
     }
 
     fn execute_system_priv(&mut self, instr: IType) -> SynchronousCause {
-        match instr.imm {
+        match (instr.imm, instr.rs1, instr.rd) {
             // ECALL
-            0 => match self.execution_env.priviledge() {
+            (0, 0, 0) => match self.execution_env.priviledge() {
                 PriviledgeMode::Machine => SynchronousCause::EnvironmentCallFromMmode,
                 PriviledgeMode::User => SynchronousCause::EnvironmentCallFromUmode,
             },
             // EBREAK
-            1 => SynchronousCause::Breakpoint,
-            // MRET, this is slightly hacky
-            0b0011000_00010 => match self.execution_env.priviledge() {
+            (1, 0, 0) => SynchronousCause::Breakpoint,
+            // MRET, this is a slightly hacky way to notify the run loop of the trap return
+            (0b0011000_00010, 0, 0) => match self.execution_env.priviledge() {
                 PriviledgeMode::Machine => SynchronousCause::MachineReturn,
                 PriviledgeMode::User => SynchronousCause::IllegalInstruction,
             },
             // TODO: SRET
-            0b0001000_00010 => SynchronousCause::IllegalInstruction,
+            (0b0001000_00010, 0, 0) => SynchronousCause::IllegalInstruction,
             _ => {
                 log::error!("Unsupported system function!");
                 SynchronousCause::IllegalInstruction

@@ -12,6 +12,7 @@ overflow-checks = false
 
 [dependencies]
 log = "0.4.17"
+env_logger = "0.10.0"
 num_enum = "0.5.9"
 
 # FIXME: Exclusivity

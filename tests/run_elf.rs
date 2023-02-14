@@ -3,6 +3,7 @@
 //!
 //! Included tests:
 //! rv32ui-p-*
+//! rv32mi-p-*
 //!
 
 use riscv_emulator::execute::Hart;
@@ -159,7 +160,7 @@ fn parsing() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn run_unittest_binary(name: &str) {
+fn run_unittest_binary(name: &str, allowed_breakpoints: usize) {
     let mut address_space = ElfTestAddressSpace::new();
 
     let mut binary_path = PathBuf::from("./tests/binaries/");
@@ -182,175 +183,101 @@ fn run_unittest_binary(name: &str) {
     };
 
     use riscv_emulator::execute::StopReason::*;
-    match hart.run(10000) {
-        MaxInstrReached => panic!("The hart didn't write to host before the step limit!"),
-        BreakpointHit => assert_eq!(
-            hart.address_space.tohost, 1,
-            "tohost wrote an non success value"
-        ),
-        UnrecoverableError => unreachable!("Not implemented in the simulator"),
+    for _ in 0..allowed_breakpoints {
+        match hart.run(10000) {
+            MaxInstrReached => panic!("The hart didn't write to host before the step limit!"),
+            BreakpointHit => {}
+            UnrecoverableError => unreachable!("Not implemented in the simulator"),
+        }
     }
+    assert_eq!(
+        hart.address_space.tohost, 1,
+        "tohost wrote an non success value"
+    )
 }
 
-#[test]
-#[ignore = "fails since mcounteren is not implemented"]
-fn test_rv32mi_p_csr() {
-    run_unittest_binary("rv32mi-p-csr");
+macro_rules! binary_test {
+    ($name:ident) => {
+        binary_test! { $name, 1 }
+    };
+    ($name:ident, $breakp:expr) => {
+        #[test]
+        fn $name() {
+            // let _ = env_logger::Builder::from_env(
+            //     env_logger::Env::default().default_filter_or("trace"),
+            // )
+            // .format_timestamp(None)
+            // .is_test(true)
+            // .try_init();
+            run_unittest_binary(stringify!($name), $breakp);
+        }
+    };
 }
 
-#[test]
-fn test_rv32ui_p_add() {
-    run_unittest_binary("rv32ui-p-add");
-}
-#[test]
-fn test_rv32ui_p_addi() {
-    run_unittest_binary("rv32ui-p-addi");
-}
-#[test]
-fn test_rv32ui_p_and() {
-    run_unittest_binary("rv32ui-p-and");
-}
-#[test]
-fn test_rv32ui_p_andi() {
-    run_unittest_binary("rv32ui-p-andi");
-}
-#[test]
-fn test_rv32ui_p_auipc() {
-    run_unittest_binary("rv32ui-p-auipc");
-}
-#[test]
-fn test_rv32ui_p_beq() {
-    run_unittest_binary("rv32ui-p-beq");
-}
-#[test]
-fn test_rv32ui_p_bge() {
-    run_unittest_binary("rv32ui-p-bge");
-}
-#[test]
-fn test_rv32ui_p_bgeu() {
-    run_unittest_binary("rv32ui-p-bgeu");
-}
-#[test]
-fn test_rv32ui_p_blt() {
-    run_unittest_binary("rv32ui-p-blt");
-}
-#[test]
-fn test_rv32ui_p_bltu() {
-    run_unittest_binary("rv32ui-p-bltu");
-}
-#[test]
-fn test_rv32ui_p_bne() {
-    run_unittest_binary("rv32ui-p-bne");
-}
-#[test]
-fn test_rv32ui_p_fence_i() {
-    run_unittest_binary("rv32ui-p-fence_i");
-}
-#[test]
-fn test_rv32ui_p_jal() {
-    run_unittest_binary("rv32ui-p-jal");
-}
-#[test]
-fn test_rv32ui_p_jalr() {
-    run_unittest_binary("rv32ui-p-jalr");
-}
-#[test]
-fn test_rv32ui_p_lb() {
-    run_unittest_binary("rv32ui-p-lb");
-}
-#[test]
-fn test_rv32ui_p_lbu() {
-    run_unittest_binary("rv32ui-p-lbu");
-}
-#[test]
-fn test_rv32ui_p_lh() {
-    run_unittest_binary("rv32ui-p-lh");
-}
-#[test]
-fn test_rv32ui_p_lhu() {
-    run_unittest_binary("rv32ui-p-lhu");
-}
-#[test]
-fn test_rv32ui_p_lui() {
-    run_unittest_binary("rv32ui-p-lui");
-}
-#[test]
-fn test_rv32ui_p_lw() {
-    run_unittest_binary("rv32ui-p-lw");
-}
-#[test]
-fn test_rv32ui_p_or() {
-    run_unittest_binary("rv32ui-p-or");
-}
-#[test]
-fn test_rv32ui_p_ori() {
-    run_unittest_binary("rv32ui-p-ori");
-}
-#[test]
-fn test_rv32ui_p_sb() {
-    run_unittest_binary("rv32ui-p-sb");
-}
-#[test]
-fn test_rv32ui_p_sh() {
-    run_unittest_binary("rv32ui-p-sh");
-}
-#[test]
-fn test_rv32ui_p_simple() {
-    run_unittest_binary("rv32ui-p-simple");
-}
-#[test]
-fn test_rv32ui_p_sll() {
-    run_unittest_binary("rv32ui-p-sll");
-}
-#[test]
-fn test_rv32ui_p_slli() {
-    run_unittest_binary("rv32ui-p-slli");
-}
-#[test]
-fn test_rv32ui_p_slt() {
-    run_unittest_binary("rv32ui-p-slt");
-}
-#[test]
-fn test_rv32ui_p_slti() {
-    run_unittest_binary("rv32ui-p-slti");
-}
-#[test]
-fn test_rv32ui_p_sltiu() {
-    run_unittest_binary("rv32ui-p-sltiu");
-}
-#[test]
-fn test_rv32ui_p_sltu() {
-    run_unittest_binary("rv32ui-p-sltu");
-}
-#[test]
-fn test_rv32ui_p_sra() {
-    run_unittest_binary("rv32ui-p-sra");
-}
-#[test]
-fn test_rv32ui_p_srai() {
-    run_unittest_binary("rv32ui-p-srai");
-}
-#[test]
-fn test_rv32ui_p_srl() {
-    run_unittest_binary("rv32ui-p-srl");
-}
-#[test]
-fn test_rv32ui_p_srli() {
-    run_unittest_binary("rv32ui-p-srli");
-}
-#[test]
-fn test_rv32ui_p_sub() {
-    run_unittest_binary("rv32ui-p-sub");
-}
-#[test]
-fn test_rv32ui_p_sw() {
-    run_unittest_binary("rv32ui-p-sw");
-}
-#[test]
-fn test_rv32ui_p_xor() {
-    run_unittest_binary("rv32ui-p-xor");
-}
-#[test]
-fn test_rv32ui_p_xori() {
-    run_unittest_binary("rv32ui-p-xori");
-}
+// Machine mode tests
+
+// FIXME: mtval
+binary_test! { rv32mi_p_illegal }
+
+// FIXME: fails since mcounteren is not implemented
+binary_test! { rv32mi_p_csr }
+
+// FIXME: user mode counter registers
+binary_test! { rv32mi_p_zicntr }
+
+// Needs Debug Mode
+//binary_test! { rv32mi_p_breakpoint }
+
+// Needs compressed instructions
+//binary_test! { rv32mi_p_ma_fetch }
+
+binary_test! { rv32mi_p_ma_addr }
+binary_test! { rv32mi_p_mcsr }
+binary_test! { rv32mi_p_ebreak, 2 }
+binary_test! { rv32mi_p_ecall }
+binary_test! { rv32mi_p_shamt }
+binary_test! { rv32mi_p_sh_misaligned }
+binary_test! { rv32mi_p_sw_misaligned }
+binary_test! { rv32mi_p_lh_misaligned }
+binary_test! { rv32mi_p_lw_misaligned }
+
+// Usermode base extension tests
+binary_test! { rv32ui_p_add }
+binary_test! { rv32ui_p_addi }
+binary_test! { rv32ui_p_and }
+binary_test! { rv32ui_p_andi }
+binary_test! { rv32ui_p_auipc }
+binary_test! { rv32ui_p_beq }
+binary_test! { rv32ui_p_bge }
+binary_test! { rv32ui_p_bgeu }
+binary_test! { rv32ui_p_blt }
+binary_test! { rv32ui_p_bltu }
+binary_test! { rv32ui_p_bne }
+binary_test! { rv32ui_p_fence_i }
+binary_test! { rv32ui_p_jal }
+binary_test! { rv32ui_p_jalr }
+binary_test! { rv32ui_p_lb }
+binary_test! { rv32ui_p_lbu }
+binary_test! { rv32ui_p_lh }
+binary_test! { rv32ui_p_lhu }
+binary_test! { rv32ui_p_lui }
+binary_test! { rv32ui_p_lw }
+binary_test! { rv32ui_p_or }
+binary_test! { rv32ui_p_ori }
+binary_test! { rv32ui_p_sb }
+binary_test! { rv32ui_p_sh }
+binary_test! { rv32ui_p_simple }
+binary_test! { rv32ui_p_sll }
+binary_test! { rv32ui_p_slli }
+binary_test! { rv32ui_p_slt }
+binary_test! { rv32ui_p_slti }
+binary_test! { rv32ui_p_sltiu }
+binary_test! { rv32ui_p_sltu }
+binary_test! { rv32ui_p_sra }
+binary_test! { rv32ui_p_srai }
+binary_test! { rv32ui_p_srl }
+binary_test! { rv32ui_p_srli }
+binary_test! { rv32ui_p_sub }
+binary_test! { rv32ui_p_sw }
+binary_test! { rv32ui_p_xor }
+binary_test! { rv32ui_p_xori }
