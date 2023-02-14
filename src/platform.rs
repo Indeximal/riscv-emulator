@@ -14,7 +14,7 @@ pub mod exception {
 
     // Interrupt bit 0
     #[derive(Debug, Clone, Copy, TryFromPrimitive)]
-    #[repr(u32)]
+    #[repr(u64)]
     pub enum SynchronousCause {
         InstructionAddressMisaligned = 0,
         InstructionAccessFault = 1,
@@ -40,7 +40,7 @@ pub mod exception {
 
     // Interrupt bit 1
     #[derive(Debug, Clone, Copy, PartialEq, TryFromPrimitive)]
-    #[repr(u32)]
+    #[repr(u64)]
     pub enum InterruptCause {
         SupervisorSoftwareInterrupt = 1,
         MachineSoftwareInterrupt = 3,
@@ -141,9 +141,11 @@ pub mod exception {
 /// Little endian by design, such that instruction fetches (always LE)
 /// and word fetches work the same.
 pub trait AddressSpace {
+    fn read_doubleword(&self, addr: Uxlen) -> Result<u64, SynchronousCause>;
     fn read_word(&self, addr: Uxlen) -> Result<u32, SynchronousCause>;
     fn read_halfword(&self, addr: Uxlen) -> Result<u16, SynchronousCause>;
     fn read_byte(&self, addr: Uxlen) -> Result<u8, SynchronousCause>;
+    fn write_doubleword(&mut self, addr: Uxlen, val: u64) -> Result<(), SynchronousCause>;
     fn write_word(&mut self, addr: Uxlen, val: u32) -> Result<(), SynchronousCause>;
     fn write_halfword(&mut self, addr: Uxlen, val: u16) -> Result<(), SynchronousCause>;
     fn write_byte(&mut self, addr: Uxlen, val: u8) -> Result<(), SynchronousCause>;
@@ -199,8 +201,6 @@ pub struct MStatusReg {
 
     /// Previous priviledge mode. bits 11 & 12.
     mpp: PriviledgeMode,
-    // TODO: UXL! (3.1.6.2)
-
     // TODO: all the memory protection stuff, but can be read only zero
     // e.g MPRV: Modify priviledge (use `mpp` as effective memory priviledge)
 
@@ -211,7 +211,10 @@ pub struct MStatusReg {
 
 impl MStatusReg {
     fn encode(&self) -> Uxlen {
-        ((self.mie as Uxlen) << 3) | ((self.mpie as Uxlen) << 7) | ((self.mpp as Uxlen) << 11)
+        (2 /* UXL=64 */ << 32)
+            | ((self.mie as Uxlen) << 3)
+            | ((self.mpie as Uxlen) << 7)
+            | ((self.mpp as Uxlen) << 11)
     }
 
     fn update(&mut self, val: Uxlen) {
@@ -231,8 +234,8 @@ impl Default for PlatformState {
     fn default() -> Self {
         Self {
             csr_mhartid: 0,
-            /// Defines MXLEN and implemented extensions. FIXME: dynamic 64 bit
-            csr_misa: (1 << 30) | crate::isa_flags::I | crate::isa_flags::U,
+            /// Defines MXLEN and implemented extensions.
+            csr_misa: (1 << 63) | crate::isa_flags::I | crate::isa_flags::U,
             tick_count: 0,
             // Unspecified after reset
             csr_mepc: 0,

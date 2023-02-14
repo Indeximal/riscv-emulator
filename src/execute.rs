@@ -96,22 +96,51 @@ impl<A: AddressSpace> Hart<A> {
                     0b110 => self.execute_ori(instr.rs1, instr.imm as Uxlen, instr.rd),
                     0b111 => self.execute_andi(instr.rs1, instr.imm as Uxlen, instr.rd),
                     0b001 => {
-                        // FIXME: 64 bit
-                        if instr.imm & 0b1111_1110_0000 != 0 {
+                        if instr.imm & 0b1111_1100_0000 == 0 {
+                            self.execute_slli(instr.rs1, instr.imm as Uxlen, instr.rd)
+                        } else {
                             return Err(SynchronousCause::IllegalInstruction);
                         }
-                        self.execute_slli(instr.rs1, instr.imm as Uxlen, instr.rd)
                     }
                     0b101 => {
-                        if instr.imm & 0b1111_1110_0000 == 0 {
+                        if instr.imm & 0b1111_1100_0000 == 0 {
                             self.execute_srli(instr.rs1, instr.imm as Uxlen, instr.rd)
-                        } else if instr.imm & 0b1111_1110_0000 == 0b0100_0000_0000 {
+                        } else if instr.imm & 0b1111_1100_0000 == 0b0100_0000_0000 {
                             self.execute_srai(instr.rs1, instr.imm as Uxlen, instr.rd)
                         } else {
                             return Err(SynchronousCause::IllegalInstruction);
                         }
                     }
                     _ => unreachable!("funct3 should only be 3 bits"),
+                }
+                self.reg_pc += 4;
+            }
+            opcode::OP_IMM_32 => 'instr_exec: {
+                let instr: IType = instruction.into();
+                if instr.rd == 0 {
+                    self.hint(instruction);
+                    self.reg_pc += 4;
+                    break 'instr_exec;
+                }
+                match instr.funct3 {
+                    0b000 => self.execute_addiw(instr.rs1, instr.imm, instr.rd),
+                    0b001 => {
+                        if instr.imm & 0b1111_1110_0000 == 0 {
+                            self.execute_slliw(instr.rs1, instr.imm as Uxlen, instr.rd)
+                        } else {
+                            return Err(SynchronousCause::IllegalInstruction);
+                        }
+                    }
+                    0b101 => {
+                        if instr.imm & 0b1111_1110_0000 == 0 {
+                            self.execute_srliw(instr.rs1, instr.imm as Uxlen, instr.rd)
+                        } else if instr.imm & 0b1111_1110_0000 == 0b0100_0000_0000 {
+                            self.execute_sraiw(instr.rs1, instr.imm as Uxlen, instr.rd)
+                        } else {
+                            return Err(SynchronousCause::IllegalInstruction);
+                        }
+                    }
+                    _ => return Err(SynchronousCause::IllegalInstruction),
                 }
                 self.reg_pc += 4;
             }
@@ -153,6 +182,23 @@ impl<A: AddressSpace> Hart<A> {
                     (0b000_0000, 0b001) => self.execute_sll(instr.rs1, instr.rs2, instr.rd),
                     (0b010_0000, 0b101) => self.execute_sra(instr.rs1, instr.rs2, instr.rd),
                     (0b000_0000, 0b101) => self.execute_srl(instr.rs1, instr.rs2, instr.rd),
+                    _ => return Err(SynchronousCause::IllegalInstruction),
+                }
+                self.reg_pc += 4;
+            }
+            opcode::OP_32 => 'instr_exec: {
+                let instr: RType = instruction.into();
+                if instr.rd == 0 {
+                    self.hint(instruction);
+                    self.reg_pc += 4;
+                    break 'instr_exec;
+                }
+                match (instr.funct7, instr.funct3) {
+                    (0b010_0000, 0b000) => self.execute_subw(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0000, 0b000) => self.execute_addw(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0000, 0b001) => self.execute_sllw(instr.rs1, instr.rs2, instr.rd),
+                    (0b010_0000, 0b101) => self.execute_sraw(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0000, 0b101) => self.execute_srlw(instr.rs1, instr.rs2, instr.rd),
                     _ => return Err(SynchronousCause::IllegalInstruction),
                 }
                 self.reg_pc += 4;
@@ -201,6 +247,8 @@ impl<A: AddressSpace> Hart<A> {
                     0b001 => self.execute_lh(instr.rs1, instr.imm, instr.rd)?,
                     0b101 => self.execute_lhu(instr.rs1, instr.imm, instr.rd)?,
                     0b010 => self.execute_lw(instr.rs1, instr.imm, instr.rd)?,
+                    0b110 => self.execute_lwu(instr.rs1, instr.imm, instr.rd)?,
+                    0b011 => self.execute_ld(instr.rs1, instr.imm, instr.rd)?,
                     _ => {
                         log::error!("Unsupported load width!");
                         return Err(SynchronousCause::IllegalInstruction);
@@ -214,6 +262,7 @@ impl<A: AddressSpace> Hart<A> {
                     0b000 => self.execute_sb(instr.rs1, instr.imm, instr.rs2)?,
                     0b001 => self.execute_sh(instr.rs1, instr.imm, instr.rs2)?,
                     0b010 => self.execute_sw(instr.rs1, instr.imm, instr.rs2)?,
+                    0b011 => self.execute_sd(instr.rs1, instr.imm, instr.rs2)?,
                     _ => {
                         log::error!("Unsupported store width!");
                         return Err(SynchronousCause::IllegalInstruction);
@@ -311,6 +360,12 @@ impl<A: AddressSpace> Hart<A> {
         self.regs[dest as usize] = self.regs[src as usize] + imm as Uxlen;
     }
 
+    fn execute_addiw(&mut self, src: u8, imm: Ixlen, dest: u8) {
+        // Add lower bits and sign extend
+        self.regs[dest as usize] =
+            (self.regs[src as usize] as i32).wrapping_add(imm as i32) as Ixlen as Uxlen;
+    }
+
     fn execute_slti(&mut self, src: u8, imm: Ixlen, dest: u8) {
         self.regs[dest as usize] = if (self.regs[src as usize] as Ixlen) < imm {
             1
@@ -336,29 +391,40 @@ impl<A: AddressSpace> Hart<A> {
     }
 
     fn execute_slli(&mut self, src: u8, imm: Uxlen, dest: u8) {
-        // FIXME: 64 bit?
-        self.regs[dest as usize] = self.regs[src as usize] << (imm & 0b1_1111);
+        self.regs[dest as usize] = self.regs[src as usize] << (imm & 0b11_1111);
     }
 
     fn execute_srli(&mut self, src: u8, imm: Uxlen, dest: u8) {
-        // FIXME: 64 bit?
-        self.regs[dest as usize] = self.regs[src as usize] >> (imm & 0b1_1111);
+        self.regs[dest as usize] = self.regs[src as usize] >> (imm & 0b11_1111);
     }
 
     fn execute_srai(&mut self, src: u8, imm: Uxlen, dest: u8) {
-        // FIXME: 64 bit?
         self.regs[dest as usize] =
-            ((self.regs[src as usize] as Ixlen) >> (imm & 0b1_1111)) as Uxlen;
+            ((self.regs[src as usize] as Ixlen) >> (imm & 0b11_1111)) as Uxlen;
     }
 
-    fn execute_lui(&mut self, imm: Uxlen, dest: u8) {
-        self.regs[dest as usize] = imm;
+    fn execute_slliw(&mut self, src: u8, imm: Uxlen, dest: u8) {
+        self.regs[dest as usize] =
+            ((self.regs[src as usize] as u32) << (imm & 0b1_1111)) as i32 as Ixlen as Uxlen;
+    }
+
+    fn execute_srliw(&mut self, src: u8, imm: Uxlen, dest: u8) {
+        self.regs[dest as usize] =
+            ((self.regs[src as usize] as u32) >> (imm & 0b1_1111)) as i32 as Ixlen as Uxlen;
+    }
+
+    fn execute_sraiw(&mut self, src: u8, imm: Uxlen, dest: u8) {
+        self.regs[dest as usize] =
+            ((self.regs[src as usize] as i32) >> (imm & 0b1_1111)) as Ixlen as Uxlen;
+    }
+
+    fn execute_lui(&mut self, imm: Ixlen, dest: u8) {
+        self.regs[dest as usize] = imm as Uxlen;
     }
 
     /// This instruction depends on the PC, it needs to be set to the AUIPC address.
-    fn execute_auipc(&mut self, imm: Uxlen, dest: u8) {
-        // FIXME: 64 bit?
-        self.regs[dest as usize] = self.reg_pc + imm;
+    fn execute_auipc(&mut self, imm: Ixlen, dest: u8) {
+        self.regs[dest as usize] = self.reg_pc.wrapping_add_signed(imm);
     }
 
     // Register operations
@@ -370,6 +436,20 @@ impl<A: AddressSpace> Hart<A> {
     fn execute_sub(&mut self, src1: u8, src2: u8, dest: u8) {
         // FIXME: Overflow/Underflow is ignored by specification, but not by rust?
         self.regs[dest as usize] = self.regs[src1 as usize] - self.regs[src2 as usize];
+    }
+
+    fn execute_addw(&mut self, src1: u8, src2: u8, dest: u8) {
+        // Truncate to 32 bit and then sign extend
+        self.regs[dest as usize] = (self.regs[src1 as usize] as i32)
+            .wrapping_add(self.regs[src2 as usize] as i32)
+            as Ixlen as Uxlen;
+    }
+
+    fn execute_subw(&mut self, src1: u8, src2: u8, dest: u8) {
+        // Truncate to 32 bit and then sign extend
+        self.regs[dest as usize] = (self.regs[src1 as usize] as i32)
+            .wrapping_sub(self.regs[src2 as usize] as i32)
+            as Ixlen as Uxlen;
     }
 
     fn execute_slt(&mut self, src1: u8, src2: u8, dest: u8) {
@@ -395,21 +475,36 @@ impl<A: AddressSpace> Hart<A> {
     }
 
     fn execute_sll(&mut self, src1: u8, src2: u8, dest: u8) {
-        // FIXME: 64 bit?
         self.regs[dest as usize] =
-            self.regs[src1 as usize] << (self.regs[src2 as usize] & 0b1_1111);
+            self.regs[src1 as usize] << (self.regs[src2 as usize] & 0b11_1111);
     }
 
     fn execute_srl(&mut self, src1: u8, src2: u8, dest: u8) {
-        // FIXME: 64 bit?
         self.regs[dest as usize] =
-            self.regs[src1 as usize] >> (self.regs[src2 as usize] & 0b1_1111);
+            self.regs[src1 as usize] >> (self.regs[src2 as usize] & 0b11_1111);
     }
 
     fn execute_sra(&mut self, src1: u8, src2: u8, dest: u8) {
-        // FIXME: 64 bit?
-        self.regs[dest as usize] =
-            ((self.regs[src1 as usize] as Ixlen) >> (self.regs[src2 as usize] & 0b1_1111)) as Uxlen;
+        self.regs[dest as usize] = ((self.regs[src1 as usize] as Ixlen)
+            >> (self.regs[src2 as usize] & 0b11_1111)) as Uxlen;
+    }
+
+    fn execute_sllw(&mut self, src1: u8, src2: u8, dest: u8) {
+        self.regs[dest as usize] = ((self.regs[src1 as usize] as u32)
+            << (self.regs[src2 as usize] & 0b11_1111)) as i32
+            as Ixlen as Uxlen;
+    }
+
+    fn execute_srlw(&mut self, src1: u8, src2: u8, dest: u8) {
+        self.regs[dest as usize] = ((self.regs[src1 as usize] as u32)
+            >> (self.regs[src2 as usize] & 0b11_1111)) as i32
+            as Ixlen as Uxlen;
+    }
+
+    fn execute_sraw(&mut self, src1: u8, src2: u8, dest: u8) {
+        self.regs[dest as usize] = ((self.regs[src1 as usize] as i32)
+            >> (self.regs[src2 as usize] & 0b11_1111)) as Ixlen
+            as Uxlen;
     }
 
     /// FIXME: throw instruction-address-misaligned exception instead of truncting to two parcels.
@@ -476,9 +571,19 @@ impl<A: AddressSpace> Hart<A> {
     }
 
     // Load/Store
+    fn execute_ld(&mut self, base: u8, offset: Ixlen, dest: u8) -> InstrExecResult {
+        let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
+        self.regs[dest as usize] = self.address_space.read_doubleword(addr)?;
+        Ok(())
+    }
     fn execute_lw(&mut self, base: u8, offset: Ixlen, dest: u8) -> InstrExecResult {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
-        self.regs[dest as usize] = self.address_space.read_word(addr)?;
+        self.regs[dest as usize] = self.address_space.read_word(addr)? as i32 as Ixlen as Uxlen;
+        Ok(())
+    }
+    fn execute_lwu(&mut self, base: u8, offset: Ixlen, dest: u8) -> InstrExecResult {
+        let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
+        self.regs[dest as usize] = self.address_space.read_word(addr)? as Uxlen;
         Ok(())
     }
     fn execute_lh(&mut self, base: u8, offset: Ixlen, dest: u8) -> InstrExecResult {
@@ -501,6 +606,12 @@ impl<A: AddressSpace> Hart<A> {
         let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
         self.regs[dest as usize] = self.address_space.read_byte(addr)? as Uxlen;
         Ok(())
+    }
+
+    fn execute_sd(&mut self, base: u8, offset: Ixlen, src: u8) -> InstrExecResult {
+        let addr = (self.regs[base as usize] as Ixlen + offset) as Uxlen;
+        self.address_space
+            .write_doubleword(addr, self.regs[src as usize] as u64)
     }
 
     fn execute_sw(&mut self, base: u8, offset: Ixlen, src: u8) -> InstrExecResult {

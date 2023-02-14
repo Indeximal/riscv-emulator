@@ -2,7 +2,7 @@
 https://riscv.org/technical/specifications/
 
 # Execution Environment Spec
-* ISA: RV32I_Zicsr_Zifencei (currently), Goal is RV64IMAC_Zicsr_Zifencei
+* ISA: RV64I_Zicsr_Zifencei (currently), Goal is RV64IMAC_Zicsr_Zifencei
 * Priviledge modes: Machine mode and user mode (currently), Goal is 3 level: M, S, U.
 Maybe add Debug mode aswell
 * Address space: generic.
@@ -13,7 +13,6 @@ Goal is virtual memory (maybe Phyical Memory Protection PMP)
 
 # TODO
 * Use Wrapping as the integer type (?)
-* 64bit
 * M
 * A
 * Timer Interrupt, proper csr, mstatus: TW & WFI, ...

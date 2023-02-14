@@ -2,8 +2,8 @@
 //! These tests are from https://github.com/riscv-software-src/riscv-tests
 //!
 //! Included tests:
-//! rv32ui-p-*
-//! rv32mi-p-*
+//! rv64ui-p-*
+//! rv64mi-p-*
 //!
 
 use riscv_emulator::execute::Hart;
@@ -24,8 +24,8 @@ struct ElfTestAddressSpace {
 }
 
 impl ElfTestAddressSpace {
-    const MEM_MASK: Uxlen = 0xffff_c000;
-    const MEM_PATTERN: Uxlen = 0x8000_0000;
+    const MEM_MASK: Uxlen = !0x0000_0000_0000_2fff;
+    const MEM_PATTERN: Uxlen = 0x0000_0000_8000_0000;
 
     fn address<const WIDTH: usize>(&self, addr: Uxlen) -> Result<usize, ()> {
         let end_addr = addr + WIDTH as Uxlen - 1;
@@ -51,6 +51,17 @@ impl ElfTestAddressSpace {
 }
 
 impl AddressSpace for ElfTestAddressSpace {
+    fn read_doubleword(&self, addr: Uxlen) -> Result<u64, SynchronousCause> {
+        let lsb_index = self
+            .address::<8>(addr)
+            .map_err(|_| SynchronousCause::LoadAccessFault)?;
+        Ok(u64::from_le_bytes(
+            self.main_memory[lsb_index..lsb_index + 8]
+                .try_into()
+                .unwrap(),
+        ))
+    }
+
     fn read_word(&self, addr: Uxlen) -> Result<u32, SynchronousCause> {
         let lsb_index = self
             .address::<4>(addr)
@@ -78,6 +89,15 @@ impl AddressSpace for ElfTestAddressSpace {
             .address::<1>(addr)
             .map_err(|_| SynchronousCause::LoadAccessFault)?;
         Ok(self.main_memory[lsb_index])
+    }
+
+    fn write_doubleword(&mut self, addr: Uxlen, val: u64) -> Result<(), SynchronousCause> {
+        let lsb_index = self
+            .address::<8>(addr)
+            .map_err(|_| SynchronousCause::StoreAMOAccessFault)?;
+        self.main_memory[lsb_index..lsb_index + 8].copy_from_slice(&val.to_le_bytes());
+
+        Ok(())
     }
 
     fn write_word(&mut self, addr: Uxlen, val: u32) -> Result<(), SynchronousCause> {
@@ -203,12 +223,12 @@ macro_rules! binary_test {
     ($name:ident, $breakp:expr) => {
         #[test]
         fn $name() {
-            // let _ = env_logger::Builder::from_env(
-            //     env_logger::Env::default().default_filter_or("trace"),
-            // )
-            // .format_timestamp(None)
-            // .is_test(true)
-            // .try_init();
+            let _ = env_logger::Builder::from_env(
+                env_logger::Env::default().default_filter_or("trace"),
+            )
+            .format_timestamp(None)
+            .is_test(true)
+            .try_init();
             run_unittest_binary(stringify!($name), $breakp);
         }
     };
@@ -217,67 +237,83 @@ macro_rules! binary_test {
 // Machine mode tests
 
 // FIXME: mtval
-binary_test! { rv32mi_p_illegal }
+binary_test! { rv64mi_p_illegal }
 
 // FIXME: fails since mcounteren is not implemented
-binary_test! { rv32mi_p_csr }
+binary_test! { rv64mi_p_csr }
 
 // FIXME: user mode counter registers
-binary_test! { rv32mi_p_zicntr }
+binary_test! { rv64mi_p_zicntr }
 
 // Needs Debug Mode
-//binary_test! { rv32mi_p_breakpoint }
+// binary_test! { rv64mi_p_breakpoint }
 
 // Needs compressed instructions
-//binary_test! { rv32mi_p_ma_fetch }
+// binary_test! { rv64mi_p_ma_fetch }
 
-binary_test! { rv32mi_p_ma_addr }
-binary_test! { rv32mi_p_mcsr }
-binary_test! { rv32mi_p_ebreak, 2 }
-binary_test! { rv32mi_p_ecall }
-binary_test! { rv32mi_p_shamt }
-binary_test! { rv32mi_p_sh_misaligned }
-binary_test! { rv32mi_p_sw_misaligned }
-binary_test! { rv32mi_p_lh_misaligned }
-binary_test! { rv32mi_p_lw_misaligned }
+binary_test! { rv64mi_p_access }
+binary_test! { rv64mi_p_ld_misaligned }
+binary_test! { rv64mi_p_lh_misaligned }
+binary_test! { rv64mi_p_lw_misaligned }
+binary_test! { rv64mi_p_ma_addr }
+binary_test! { rv64mi_p_mcsr }
+binary_test! { rv64mi_p_ebreak, 2 }
+binary_test! { rv64mi_p_ecall }
+binary_test! { rv64mi_p_sd_misaligned }
+binary_test! { rv64mi_p_sh_misaligned }
+binary_test! { rv64mi_p_sw_misaligned }
 
 // Usermode base extension tests
-binary_test! { rv32ui_p_add }
-binary_test! { rv32ui_p_addi }
-binary_test! { rv32ui_p_and }
-binary_test! { rv32ui_p_andi }
-binary_test! { rv32ui_p_auipc }
-binary_test! { rv32ui_p_beq }
-binary_test! { rv32ui_p_bge }
-binary_test! { rv32ui_p_bgeu }
-binary_test! { rv32ui_p_blt }
-binary_test! { rv32ui_p_bltu }
-binary_test! { rv32ui_p_bne }
-binary_test! { rv32ui_p_fence_i }
-binary_test! { rv32ui_p_jal }
-binary_test! { rv32ui_p_jalr }
-binary_test! { rv32ui_p_lb }
-binary_test! { rv32ui_p_lbu }
-binary_test! { rv32ui_p_lh }
-binary_test! { rv32ui_p_lhu }
-binary_test! { rv32ui_p_lui }
-binary_test! { rv32ui_p_lw }
-binary_test! { rv32ui_p_or }
-binary_test! { rv32ui_p_ori }
-binary_test! { rv32ui_p_sb }
-binary_test! { rv32ui_p_sh }
-binary_test! { rv32ui_p_simple }
-binary_test! { rv32ui_p_sll }
-binary_test! { rv32ui_p_slli }
-binary_test! { rv32ui_p_slt }
-binary_test! { rv32ui_p_slti }
-binary_test! { rv32ui_p_sltiu }
-binary_test! { rv32ui_p_sltu }
-binary_test! { rv32ui_p_sra }
-binary_test! { rv32ui_p_srai }
-binary_test! { rv32ui_p_srl }
-binary_test! { rv32ui_p_srli }
-binary_test! { rv32ui_p_sub }
-binary_test! { rv32ui_p_sw }
-binary_test! { rv32ui_p_xor }
-binary_test! { rv32ui_p_xori }
+binary_test! { rv64ui_p_add }
+binary_test! { rv64ui_p_addi }
+binary_test! { rv64ui_p_addiw }
+binary_test! { rv64ui_p_addw }
+binary_test! { rv64ui_p_and }
+binary_test! { rv64ui_p_andi }
+binary_test! { rv64ui_p_auipc }
+binary_test! { rv64ui_p_beq }
+binary_test! { rv64ui_p_bge }
+binary_test! { rv64ui_p_bgeu }
+binary_test! { rv64ui_p_blt }
+binary_test! { rv64ui_p_bltu }
+binary_test! { rv64ui_p_bne }
+binary_test! { rv64ui_p_fence_i }
+binary_test! { rv64ui_p_jal }
+binary_test! { rv64ui_p_jalr }
+binary_test! { rv64ui_p_lb }
+binary_test! { rv64ui_p_lbu }
+binary_test! { rv64ui_p_ld }
+binary_test! { rv64ui_p_lh }
+binary_test! { rv64ui_p_lhu }
+binary_test! { rv64ui_p_lui }
+binary_test! { rv64ui_p_lw }
+binary_test! { rv64ui_p_lwu }
+// This is the only test where .tohost is not a 0x1000. I won't bother.
+//binary_test! { rv64ui_p_ma_data }
+binary_test! { rv64ui_p_or }
+binary_test! { rv64ui_p_ori }
+binary_test! { rv64ui_p_sb }
+binary_test! { rv64ui_p_sd }
+binary_test! { rv64ui_p_sh }
+binary_test! { rv64ui_p_simple }
+binary_test! { rv64ui_p_sll }
+binary_test! { rv64ui_p_slli }
+binary_test! { rv64ui_p_slliw }
+binary_test! { rv64ui_p_sllw }
+binary_test! { rv64ui_p_slt }
+binary_test! { rv64ui_p_slti }
+binary_test! { rv64ui_p_sltiu }
+binary_test! { rv64ui_p_sltu }
+binary_test! { rv64ui_p_sra }
+binary_test! { rv64ui_p_srai }
+binary_test! { rv64ui_p_sraiw }
+binary_test! { rv64ui_p_sraw }
+binary_test! { rv64ui_p_srl }
+binary_test! { rv64ui_p_srli }
+binary_test! { rv64ui_p_srliw }
+binary_test! { rv64ui_p_srlw }
+binary_test! { rv64ui_p_sub }
+binary_test! { rv64ui_p_subw }
+binary_test! { rv64ui_p_sw }
+binary_test! { rv64ui_p_xor }
+binary_test! { rv64ui_p_xori }

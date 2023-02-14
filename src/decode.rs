@@ -4,7 +4,7 @@
 
 #![allow(dead_code)]
 
-use crate::{Ixlen, Uxlen};
+use crate::Ixlen;
 
 pub(crate) struct RType {
     pub opcode: u8,
@@ -73,8 +73,7 @@ impl From<u32> for SType {
 pub(crate) struct UType {
     pub opcode: u8,
     pub rd: u8,
-    // FIXME: should be signed?
-    pub imm: Uxlen,
+    pub imm: Ixlen,
 }
 
 impl From<u32> for UType {
@@ -82,8 +81,8 @@ impl From<u32> for UType {
         UType {
             opcode: (instr & 0b111_1111) as u8,
             rd: ((instr >> 7) & 0b1_1111) as u8,
-            // Place into upper 20 bits. FIXME: 64bit
-            imm: (instr & 0xff_ff_f0_00) as i32 as Ixlen as Uxlen,
+            // Place into bits 31-12 & sign extend
+            imm: (instr & 0xff_ff_f0_00) as i32 as Ixlen,
         }
     }
 }

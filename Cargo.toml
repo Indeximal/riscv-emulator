@@ -15,11 +15,5 @@ log = "0.4.17"
 env_logger = "0.10.0"
 num_enum = "0.5.9"
 
-# FIXME: Exclusivity
-[features]
-default = ["rv32i"]
-rv32i = []
-rv64i = []
-
 [dev-dependencies]
 object = { version = "0.30.3", default-features = false, features = ["read_core", "elf", "std"] }
