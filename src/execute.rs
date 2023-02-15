@@ -172,6 +172,7 @@ impl<A: AddressSpace> Hart<A> {
                     break 'instr_exec;
                 }
                 match (instr.funct7, instr.funct3) {
+                    // BASE
                     (0b010_0000, 0b000) => self.execute_sub(instr.rs1, instr.rs2, instr.rd),
                     (0b000_0000, 0b000) => self.execute_add(instr.rs1, instr.rs2, instr.rd),
                     (0b000_0000, 0b010) => self.execute_slt(instr.rs1, instr.rs2, instr.rd),
@@ -182,6 +183,15 @@ impl<A: AddressSpace> Hart<A> {
                     (0b000_0000, 0b001) => self.execute_sll(instr.rs1, instr.rs2, instr.rd),
                     (0b010_0000, 0b101) => self.execute_sra(instr.rs1, instr.rs2, instr.rd),
                     (0b000_0000, 0b101) => self.execute_srl(instr.rs1, instr.rs2, instr.rd),
+                    // MULDIV
+                    (0b000_0001, 0b000) => self.execute_mul(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0001, 0b001) => self.execute_mulh(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0001, 0b010) => self.execute_mulhsu(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0001, 0b011) => self.execute_mulhu(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0001, 0b100) => self.execute_div(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0001, 0b101) => self.execute_divu(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0001, 0b110) => self.execute_rem(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0001, 0b111) => self.execute_remu(instr.rs1, instr.rs2, instr.rd),
                     _ => return Err(SynchronousCause::IllegalInstruction),
                 }
                 self.reg_pc += 4;
@@ -194,11 +204,18 @@ impl<A: AddressSpace> Hart<A> {
                     break 'instr_exec;
                 }
                 match (instr.funct7, instr.funct3) {
+                    // BASE
                     (0b010_0000, 0b000) => self.execute_subw(instr.rs1, instr.rs2, instr.rd),
                     (0b000_0000, 0b000) => self.execute_addw(instr.rs1, instr.rs2, instr.rd),
                     (0b000_0000, 0b001) => self.execute_sllw(instr.rs1, instr.rs2, instr.rd),
                     (0b010_0000, 0b101) => self.execute_sraw(instr.rs1, instr.rs2, instr.rd),
                     (0b000_0000, 0b101) => self.execute_srlw(instr.rs1, instr.rs2, instr.rd),
+                    // MULDIV
+                    (0b000_0001, 0b000) => self.execute_mulw(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0001, 0b100) => self.execute_divw(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0001, 0b101) => self.execute_divuw(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0001, 0b110) => self.execute_remw(instr.rs1, instr.rs2, instr.rd),
+                    (0b000_0001, 0b111) => self.execute_remuw(instr.rs1, instr.rs2, instr.rd),
                     _ => return Err(SynchronousCause::IllegalInstruction),
                 }
                 self.reg_pc += 4;
@@ -505,6 +522,131 @@ impl<A: AddressSpace> Hart<A> {
         self.regs[dest as usize] = ((self.regs[src1 as usize] as i32)
             >> (self.regs[src2 as usize] & 0b11_1111)) as Ixlen
             as Uxlen;
+    }
+
+    // Mul Div operations
+    fn execute_mul(&mut self, src1: u8, src2: u8, dest: u8) {
+        // lower XLEN bits of the multiplication. Same for signed and unsigned.
+        let a1 = self.regs[src1 as usize];
+        let a2 = self.regs[src2 as usize];
+        self.regs[dest as usize] = a1.wrapping_mul(a2);
+    }
+
+    fn execute_mulh(&mut self, src1: u8, src2: u8, dest: u8) {
+        // upper XLEN bits of the signed multiplication.
+        // widening_mul is unstable. And not available for signed
+        let a1 = self.regs[src1 as usize] as Ixlen as i128;
+        let a2 = self.regs[src2 as usize] as Ixlen as i128;
+        self.regs[dest as usize] = ((a1 * a2) >> 64) as Uxlen;
+    }
+
+    fn execute_mulhu(&mut self, src1: u8, src2: u8, dest: u8) {
+        // upper XLEN bits of the unsigned multiplication.
+        let a1 = self.regs[src1 as usize] as u128;
+        let a2 = self.regs[src2 as usize] as u128;
+        self.regs[dest as usize] = ((a1 * a2) >> 64) as Uxlen;
+    }
+
+    fn execute_mulhsu(&mut self, src1: u8, src2: u8, dest: u8) {
+        // upper XLEN bits of the singed-unsigned multiplication.
+        let a1 = self.regs[src1 as usize] as Ixlen as i128;
+        let a2 = self.regs[src2 as usize] as u128 as i128;
+        self.regs[dest as usize] = ((a1 * a2) >> 64) as Uxlen;
+    }
+
+    fn execute_mulw(&mut self, src1: u8, src2: u8, dest: u8) {
+        // upper 32 bits of the multiplication. Sign extended
+        let a1 = self.regs[src1 as usize] as i32;
+        let a2 = self.regs[src2 as usize] as i32;
+        self.regs[dest as usize] = a1.wrapping_mul(a2) as Ixlen as Uxlen;
+    }
+
+    fn execute_div(&mut self, src1: u8, src2: u8, dest: u8) {
+        // Signed division
+        let a1 = self.regs[src1 as usize] as Ixlen;
+        let a2 = self.regs[src2 as usize] as Ixlen;
+        if a2 != 0 {
+            self.regs[dest as usize] = a1.wrapping_div(a2) as Uxlen;
+        } else {
+            self.regs[dest as usize] = !0; // -1
+        }
+    }
+
+    fn execute_divu(&mut self, src1: u8, src2: u8, dest: u8) {
+        // Unsigned division
+        let a1 = self.regs[src1 as usize];
+        let a2 = self.regs[src2 as usize];
+        if a2 != 0 {
+            self.regs[dest as usize] = a1 / a2;
+        } else {
+            self.regs[dest as usize] = !0; // -1
+        }
+    }
+
+    fn execute_divw(&mut self, src1: u8, src2: u8, dest: u8) {
+        // Signed 32bit division
+        let a1 = self.regs[src1 as usize] as i32;
+        let a2 = self.regs[src2 as usize] as i32;
+        if a2 != 0 {
+            self.regs[dest as usize] = a1.wrapping_div(a2) as Ixlen as Uxlen;
+        } else {
+            self.regs[dest as usize] = !0; // -1
+        }
+    }
+
+    fn execute_divuw(&mut self, src1: u8, src2: u8, dest: u8) {
+        // Signed 32bit division
+        let a1 = self.regs[src1 as usize] as u32;
+        let a2 = self.regs[src2 as usize] as u32;
+        if a2 != 0 {
+            self.regs[dest as usize] = a1.wrapping_div(a2) as i32 as Ixlen as Uxlen;
+        } else {
+            self.regs[dest as usize] = !0; // -1
+        }
+    }
+
+    fn execute_rem(&mut self, src1: u8, src2: u8, dest: u8) {
+        // Signed remainder
+        let a1 = self.regs[src1 as usize] as Ixlen;
+        let a2 = self.regs[src2 as usize] as Ixlen;
+        if a2 != 0 {
+            self.regs[dest as usize] = a1.wrapping_rem(a2) as Uxlen;
+        } else {
+            self.regs[dest as usize] = a1 as Uxlen;
+        }
+    }
+
+    fn execute_remu(&mut self, src1: u8, src2: u8, dest: u8) {
+        // Unsigned remainder
+        let a1 = self.regs[src1 as usize];
+        let a2 = self.regs[src2 as usize];
+        if a2 != 0 {
+            self.regs[dest as usize] = a1 % a2;
+        } else {
+            self.regs[dest as usize] = a1;
+        }
+    }
+
+    fn execute_remw(&mut self, src1: u8, src2: u8, dest: u8) {
+        // Signed 32bit remainder
+        let a1 = self.regs[src1 as usize] as i32;
+        let a2 = self.regs[src2 as usize] as i32;
+        if a2 != 0 {
+            self.regs[dest as usize] = a1.wrapping_rem(a2) as Ixlen as Uxlen;
+        } else {
+            self.regs[dest as usize] = a1 as Ixlen as Uxlen;
+        }
+    }
+
+    fn execute_remuw(&mut self, src1: u8, src2: u8, dest: u8) {
+        // Signed 32bit remainder
+        let a1 = self.regs[src1 as usize] as u32;
+        let a2 = self.regs[src2 as usize] as u32;
+        if a2 != 0 {
+            self.regs[dest as usize] = (a1 % a2) as i32 as Ixlen as Uxlen;
+        } else {
+            self.regs[dest as usize] = a1 as i32 as Ixlen as Uxlen;
+        }
     }
 
     /// FIXME: throw instruction-address-misaligned exception instead of truncting to two parcels.

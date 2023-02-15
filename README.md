@@ -2,21 +2,21 @@
 https://riscv.org/technical/specifications/
 
 # Execution Environment Spec
-* ISA: RV64I_Zicsr_Zifencei (currently), Goal is RV64IMAC_Zicsr_Zifencei
+* ISA: RV64IM_Zicsr_Zifencei (currently), Goal is RV64IMAC_Zicsr_Zifencei
 * Priviledge modes: Machine mode and user mode (currently), Goal is 3 level: M, S, U.
 Maybe add Debug mode aswell
 * Address space: generic.
 Goal is virtual memory (maybe Phyical Memory Protection PMP)
 * Num Harts: 1 currently, maybe multiple at some point
 * Memory Model: Will always be sequentially consitent (Thus Ztso in particular)
-* TODO: Reset and NonMaskableInterrupt Vector location
 
 # TODO
-* Use Wrapping as the integer type (?)
-* M
+* C
+* Supervisor Mode
+* Virtual Memory
 * A
 * Timer Interrupt, proper csr, mstatus: TW & WFI, ...
-* C
+* Use Wrapping as the integer type (?)
 
 # Goal
 Support running seL4.

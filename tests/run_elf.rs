@@ -172,7 +172,7 @@ fn parse_data<'a>(bin_data: &'a Vec<u8>) -> Option<&'a [u8]> {
 
 #[test]
 fn parsing() -> Result<(), Box<dyn Error>> {
-    let binary = fs::read("./tests/binaries/rv32ui-p-add")?;
+    let binary = fs::read("./tests/binaries/rv64ui_p_add")?;
     let data_ref = parse_text_init(&binary);
 
     assert_eq!(data_ref[0], 0x6f);
@@ -317,3 +317,18 @@ binary_test! { rv64ui_p_subw }
 binary_test! { rv64ui_p_sw }
 binary_test! { rv64ui_p_xor }
 binary_test! { rv64ui_p_xori }
+
+// Usermode Mul Div
+binary_test! { rv64um_p_mul }
+binary_test! { rv64um_p_mulh }
+binary_test! { rv64um_p_mulhu }
+binary_test! { rv64um_p_mulhsu }
+binary_test! { rv64um_p_mulw }
+binary_test! { rv64um_p_div }
+binary_test! { rv64um_p_divu }
+binary_test! { rv64um_p_divw }
+binary_test! { rv64um_p_divuw }
+binary_test! { rv64um_p_rem }
+binary_test! { rv64um_p_remu }
+binary_test! { rv64um_p_remw }
+binary_test! { rv64um_p_remuw }
