@@ -1,0 +1,26 @@
+Vendor: Indeximal
+Device: RistVEmulator
+ISA: RV64IM_Zicsr_Zifencei
+# FIXME: I have no fucking clue what version I am using.
+# I think I've implemented 2.1, but that is not an option.
+User_Spec_Version: "2.3"
+Privilege_Spec_Version: "1.12"
+hw_data_misaligned_support: True
+supported_xlen : [64]
+# FIXME: I don't have PMP ??
+pmp_granularity : 4
+# FIXME: I don't really have a physical address
+physical_addr_sz : 48
+
+# FIXME: Do I need priviledge mode. Docs "latest" and "stable" are conflicting
+custom_exceptions:
+  - cause_val: 24
+    cause_name: reset
+  - cause_val: 25
+    cause_name: unsupported
+  - cause_val: 26
+    cause_name: mreturn
+custom_interrupts:
+  - cause_val: 16
+    cause_name: unsupported
+    

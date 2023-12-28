@@ -1,27 +1,40 @@
+# RiscV Emulator
 
-https://riscv.org/technical/specifications/
+This is an (WIP) implementation of a interpreting simulator of the RiscV ISA.
+In a sense this is an educational reimplementation of <https://github.com/riscv-software-src/riscv-isa-sim> in Rust.
 
-# Execution Environment Spec
+The current state is that this project is abandoned with its current feature set,
+which is enough to run machine mode and user mode RV64IM_Zicsr_Zifencei code
+with some of the most important csrs implemented.
+
+# Goals
+Support running [xv6](https://github.com/mit-pdos/xv6-riscv), which runs on the `virt` qemu board.
+See <https://www.qemu.org/docs/master/system/target-riscv.html#risc-v-cpu-firmware>.
+It also uses a virtio block device.
+I modified the Makefile to run on `march=rv64ima_zicsr_zifencei`.
+xv6 uses the following csrs: "medeleg, mepc, mhartid, mideleg, mie, mscratch, mstatus, mtvec, pmpaddr0, pmpcfg0, satp, scause, sepc, sie, sip, sscratch, sstatus, stval, stvec"
+
+## Execution Environment Spec
 * ISA: RV64IM_Zicsr_Zifencei (currently), Goal is RV64IMAC_Zicsr_Zifencei
+  <https://riscv.org/technical/specifications/>
 * Priviledge modes: Machine mode and user mode (currently), Goal is 3 level: M, S, U.
 Maybe add Debug mode aswell
-* Address space: generic.
+* Address space: generic. Goal: <https://github.com/mit-pdos/xv6-riscv/blob/f5b93ef12f7159f74f80f94729ee4faabe42c360/kernel/memlayout.h>
 Goal is virtual memory (maybe Phyical Memory Protection PMP)
 * Num Harts: 1 currently, maybe multiple at some point
 * Memory Model: Will always be sequentially consitent (Thus Ztso in particular)
 
 # TODO
-* C
 * Supervisor Mode
+* A mock
 * Virtual Memory
-* A
+* PLIC/CLIC
 * Timer Interrupt, proper csr, mstatus: TW & WFI, ...
+* Virtio block device
+* UART
 * Use Wrapping as the integer type (?)
+* C
 
-# Goal
-Support running seL4.
-Needs platform support: https://docs.sel4.systems/Hardware/
-https://docs.sel4.systems/Hardware/spike.html
 
 # Tests
 There are some tests here:

@@ -41,10 +41,13 @@ impl ElfTestAddressSpace {
     /// Create a new address space with the main memory on the heap.
     fn new() -> Self {
         // Cannot use `Box::new([0u8; 0x4000])` as this creates the data on the stack first.
-        let mem = vec![0u8; 0x4000].into_boxed_slice();
+        let mem: Box<[u8; 0x4000]> = vec![0u8; 0x4000]
+            .into_boxed_slice()
+            .try_into()
+            .expect("Wrong memory size");
         ElfTestAddressSpace {
             // FIXME: compile time garantee?
-            main_memory: mem.try_into().expect("Wrong memory size"),
+            main_memory: mem,
             tohost: 0,
         }
     }
